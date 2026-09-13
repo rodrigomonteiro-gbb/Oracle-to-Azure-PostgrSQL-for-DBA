@@ -82,16 +82,16 @@ Notice the input used for this sample execution:</br>
 
 * the following screenshots contain the PGBENCH execution at launch, 10 seconds, 20 seconds, and 60 seconds. 
 
-![PGBench at launch](IMAGES/DAY01/workload-execution-pgbench-00-seconds.png)
+![PGBench at launch](images/workload-execution-pgbench-00-seconds.png)
 </br>
 </br>
-![PGBench at 10 seconds](IMAGES/DAY01/workload-execution-pgbench-10-seconds.png)
+![PGBench at 10 seconds](images/workload-execution-pgbench-10-seconds.png)
 </br>
 </br>
-![PGBench at 20 seconds](IMAGES/DAY01/workload-execution-pgbench-20-seconds.png)
+![PGBench at 20 seconds](images//workload-execution-pgbench-20-seconds.png)
 </br>
 </br>
-![PGBench at 60 seconds](IMAGES/DAY01/workload-execution-pgbench-60-seconds.png)
+![PGBench at 60 seconds](images//workload-execution-pgbench-60-seconds.png)
 </br>
 </br>
 now we used PGADMIN to connect to the same server, and visualized the activity. The screenshots below show:</br>
@@ -100,12 +100,12 @@ now we used PGADMIN to connect to the same server, and visualized the activity. 
 * State Dashboard
 * System View query execution
 
-![Activity Dashboard](IMAGES/DAY01/workload-analysis-pgadmin-dashboard-activity.png)
+![Activity Dashboard](images/workload-analysis-pgadmin-dashboard-activity.png)
 </br>
 </br>
-![State Dashboard](IMAGES/DAY01/workload-analysis-pgadmin-dashboard-state.png)
+![State Dashboard](images/workload-analysis-pgadmin-dashboard-state.png)
 </br>
 </br>
-![System View query](IMAGES/DAY01/workload-analysis-pgadmin-DBA_Query.png)
+![System View query](images/workload-analysis-pgadmin-DBA_Query.png)
 </br>
 </br>
