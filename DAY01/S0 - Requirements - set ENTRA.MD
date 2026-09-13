@@ -10,7 +10,8 @@
 1 - Select the account to be used for Azure Database for PostgreSQL Flexible Server admin account</br>
 2 - Click **SELECT** then confirm the operation
 
-:::image type="content" source="images/new-flexserver-1-set-admin.png" alt-text="set-admin":::
 </br>
+</br>
+![Set-Admin](images/new-flexserver-1-set-admin.png)
 </br>
 Go back to Requirements [Azure PostgreSQL Workshop Prerequisites](S0%20-%20Requirements.md)

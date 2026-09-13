@@ -16,7 +16,8 @@ from the step **Configure Server** above
 9 - Geo-Redundant backup. You can leave off for this workshop
 10 - Save. After Saving, it will take you back to the previous screen with the Basic Tab
 
-:::image type="content" source="images/new-flexserver-1-configure-server.png" alt-text="configure-server":::
+![Configure-Server](images/new-flexserver-1-configure-server.png)
+
 </br>
 </br>
 Go back to Requirements [Azure PostgreSQL Workshop Prerequisites](S0%20-%20Requirements.md)
