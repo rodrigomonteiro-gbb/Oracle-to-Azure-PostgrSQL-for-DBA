@@ -14,4 +14,6 @@
 </br>
 
 </br>
-Go back to Requirements [Azure PostgreSQL Workshop Prerequisites](S0%20-%20Requirements.md)</br>
+Go back to Requirements 
+
+[Azure PostgreSQL Workshop Prerequisites](S0%20-%20Requirements.md)

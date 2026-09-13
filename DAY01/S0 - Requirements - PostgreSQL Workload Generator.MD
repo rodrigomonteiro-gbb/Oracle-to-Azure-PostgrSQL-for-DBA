@@ -28,7 +28,7 @@ You need to propulate the following fields to allow a connection to PostgreSQL:<
 <li>3 - Database Name: The name given to the AdventureWorks database.</li>
 <li>4 - Username: a valid login to the database, with read/write permissions.</li>
 <li>5 - Password: the corresponding password to the username entered above.</li>
-<li>6 - Workload: a list of existing workload simulations.</li>
+<li>6 - [Workload](S0%20-%20Requirements%20-%20WorkloadDefinitions.MD): a list of existing workload simulations.</li>
 <li>7 - Clients: the number of clientes PGBENCH will execute in parallel with the selected workload.</li>
 <li>8 - Threads: the number of Threads PGBENCH will lauch.</li>
 <li>9 - Limit execution to

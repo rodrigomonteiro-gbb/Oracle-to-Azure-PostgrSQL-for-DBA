@@ -20,4 +20,6 @@ from the step **Configure Server** above
 ![Configure-Server](images/new-flexserver-1-configure-server.png)
 
 </br>
-Go back to Requirements [Azure PostgreSQL Workshop Prerequisites](S0%20-%20Requirements.md)
+Go back to Requirements 
+
+[Azure PostgreSQL Workshop Prerequisites](S0%20-%20Requirements.md)
