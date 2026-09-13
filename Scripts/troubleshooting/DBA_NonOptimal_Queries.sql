@@ -20,7 +20,7 @@ SELECT pid,
 FROM pg_stat_activity
 WHERE datname = current_database()
   AND state <> 'idle'
-  AND application_name = 'PGBench_Sargability'
+  AND application_name LIKE 'PGBench%'
 ORDER BY query_duration DESC;
 
 -- 2. Most expensive captured statements from the target table.
@@ -47,20 +47,7 @@ ORDER BY total_exec_time DESC
 LIMIT 25;
 
 -- 3. Table-level scan totals since statistics were last reset.
--- 3.A sequential scans statistics
-
-SELECT schemaname,
-       relname,
-       seq_scan,
-       seq_tup_read,
-       idx_scan,
-       idx_tup_fetch,
-       n_live_tup,
-       stats_reset
-FROM pg_stat_user_tables
-ORDER BY seq_tup_read DESC;
-
--- 3.B Compare these counters before and after running workload 5.
+-- Compare these counters before and after running workload 5.
 SELECT schemaname,
        relname,
        seq_scan,
@@ -76,7 +63,8 @@ CROSS JOIN LATERAL (
     WHERE datname = current_database()
 ) AS database_stats
 WHERE schemaname = 'public'
-  AND relname = 'productdescription_sarg';
+  AND relname IN ('productdescription_sarg', 'productdescription_sarg_fixed')
+ORDER BY relname;
 
 -- 4. Index definitions and usage totals for the target table.
 SELECT schemaname,
@@ -87,6 +75,7 @@ SELECT schemaname,
        pg_get_indexdef(indexrelid) AS index_definition
 FROM pg_stat_user_indexes
 WHERE schemaname = 'public'
-  AND relname = 'productdescription_sarg'
-ORDER BY idx_scan DESC,
+  AND relname IN ('productdescription_sarg', 'productdescription_sarg_fixed')
+ORDER BY relname,
+         idx_scan DESC,
          indexrelname;

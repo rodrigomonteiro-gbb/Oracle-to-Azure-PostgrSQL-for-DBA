@@ -4,9 +4,7 @@ FROM pg_stat_activity
 WHERE
 	datname = 'adventureworks'
 	AND
-	application_name like 'PGBench%'
-	AND
-	state != 'idle'
+	application_name LIKE 'PGBench%'
 
 /* Show All Sessions */
 -- Something equivalent of SQL Server's sp_whoisactive view:
