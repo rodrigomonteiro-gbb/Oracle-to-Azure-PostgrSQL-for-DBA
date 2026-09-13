@@ -12,12 +12,12 @@ from the step **Configure Server** above
 5 - Performance Tier</br>
 6 - IOPS</br>
 7 - Zonal Resiliency. Select Enabled</br>
-8 - Backups. Select from 0 to 35 days
-9 - Geo-Redundant backup. You can leave off for this workshop
-10 - Save. After Saving, it will take you back to the previous screen with the Basic Tab
+8 - Backups. Select from 0 to 35 days</br>
+9 - Geo-Redundant backup. You can leave off for this workshop</br>
+10 - Save. After Saving, it will take you back to the previous screen with the Basic Tab</br>
+</br>
 
 ![Configure-Server](images/new-flexserver-1-configure-server.png)
 
-</br>
 </br>
 Go back to Requirements [Azure PostgreSQL Workshop Prerequisites](S0%20-%20Requirements.md)
