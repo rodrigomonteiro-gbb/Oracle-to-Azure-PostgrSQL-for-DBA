@@ -6,12 +6,12 @@
 ![Download PGBench](images/PGBench_Setup_01_download.png)
 </br>
 
-3. go to the downloads folder:</br>
+2. go to the downloads folder:</br>
 
 ![Downloads Folder](images/PGBench_Setup_03_download_folder.png)
 </br>
 
-4. Execute the downloaded file:</br>
+3. Execute the downloaded file:</br>
 
 ![Install](images/PGBench_Setup_04_install.png)
 </br>
@@ -21,15 +21,15 @@ during the install, PGBench shows the default folder where it will be installed.
 ![Copy Path](images/PGBench_Setup_05_install_folder.png)
 </br>
 
-6. Uncheck PostGreSQL from the options:</br>
+4. Uncheck PostGreSQL from the options:</br>
 
 ![Setup Options](images/PGBench_Setup_06_install_options.png)
 </br>
 
-7. Complete the install</br>
+5. Complete the install</br>
 
 ![Setup Complete](images/PGBench_Setup_07_confirmation.png)
 </br>
 
-8. Add the PATH captured on step 4 above into the Environment Variables **PATH**
+6. Add the PATH captured on step 3 above into the Environment Variables **PATH**
 
