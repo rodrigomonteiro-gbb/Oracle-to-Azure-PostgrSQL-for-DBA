@@ -13,14 +13,18 @@ PostgreSQL pgbench Documentation [postgresql.org]
 </br>
 </br>
 
-`` pgbench --help</br>
+``` powershell
+pgbench --help</br>
+```
 
 </br>
 
 and</br>
 
 </br>
+``` powershell
 pgbench --version</br>
+```
 
 </br>
 
@@ -29,28 +33,35 @@ pgbench --version</br>
 Consider this script:</br>
 </br>
 
-``SELECT count(*)
-</br>
-`` FROM  sales.salesorderheader;
-</br>
-If executed through:
+```sql
+SELECT count(*)</br>
+FROM  sales.salesorderheader;</br>
+```
 
+</br>If executed through:
+
+```powershell
 * pgbench -f myscript.sql -c 1 -j 1 -T 10 adventureworks
+```
 
-You will not see the SELECT results.
-pgbench executes the query but discards the result set.
-Instead you'll get something like:
+You will not see the SELECT results.</br>
+pgbench executes the query but discards the result set.</br>
+Instead you'll get something like:</br>
 
+
+```code
 transaction type: myscript.sql
 number of clients: 1
 number of threads: 1
 duration: 10 s
 latency average = 12.3 ms
 tps = 81.5
+```
 
 </br>
 
-:::image type="content" source="./images/PGBench_01_NoResults.png" alt-text="PGBench doesn't show results":::
+![PGBench doesn't show results](images/PGBench_01_NoResults.png)
+</br>
 
 
 </br>
@@ -60,22 +71,23 @@ tps = 81.5
 A very useful option is for PGBench to generate a session log file using the -l option:</br>
 </br>
 
-`PowerShell
-
+```PowerShell
 pgbench -f workload.sql `
 -c 50 `
 -j 10 `
 -T 300 `
 **-l** `
 adventureworks`
+```
 
 </br>
 The -l option generates .log files in the folder where PGBench is executed:</br>
 
 </br>
 
-:::image type="content" source="./images/PGBench_02_SessionLogOutput.png" alt-text="PGBench Session Log output":::
+![PGBench Log output](images/PGBench_02_SessionLogOutput.png)
 </br>
+
 
 Session Log contents are as follows:
 
@@ -89,8 +101,9 @@ The exact format varies slightly by PostgreSQL version.
 
 </br>
 
-:::image type="content" source="./images/PGBench_03_SessionLogOutput.png" alt-text="PGBench output example":::
+![PGBench output example](images/PGBench_03_SessionLogOutput.png)
 </br>
+
 
 ## 4. PGBench Detailed Report
 
@@ -109,8 +122,9 @@ adventureworks`
 
 </br></br>
 
+![PGBench detailed report](images/PGBench_04_DetailedReport.png)
+</br>
 
-:::image type="content" source="./images/PGBench_04_DetailedReport.png" alt-text="PGBench Detailed Report":::
 </br>
 </br>
 
@@ -121,19 +135,21 @@ with Verbose mode you'll get Connection and Execution progress messages
 </br>
 </br>
 
-`PowerShell
-
+```PowerShell
 pgbench -v
 or
 pgbench --verbose
-`
-</br>
-`pgbench **-v** -f workload.sql -c 1 -T 10 adventureworks`
+```
 
+</br>
+```powershell
+pgbench **-v** -f workload.sql -c 1 -T 10 adventureworks`
+```
 
 </br></br>
 
-:::image type="content" source="./images/PGBench_05_VerboseMode.png" alt-text="PGBench Verbose Mode":::
+![PGBench verbose mode](images/PGBench_05_VerboseMode.png)
+</br>
 </br>
 </br>
 
