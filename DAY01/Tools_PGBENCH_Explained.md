@@ -22,7 +22,7 @@ pgbench --help</br>
 and</br>
 
 </br>
-``` powershell
+```powershell
 pgbench --version</br>
 ```
 
@@ -111,8 +111,7 @@ The exact format varies slightly by PostgreSQL version.
 The -r option reports average latency per statement. This is one of the most useful options when tuning a workload. The official documentation describes custom script execution and reporting capabilities. [postgresql.org]</br>
 </br>
 
-`PowerShell
-
+```powershell
 pgbench -f workload.sql `
 -c 100 `
 -j 20 `
@@ -135,14 +134,15 @@ with Verbose mode you'll get Connection and Execution progress messages
 </br>
 </br>
 
-```PowerShell
+
+```powershell
 pgbench -v
 or
 pgbench --verbose
 ```
 
 </br>
-```powershell
+```Powershell
 pgbench **-v** -f workload.sql -c 1 -T 10 adventureworks`
 ```
 
