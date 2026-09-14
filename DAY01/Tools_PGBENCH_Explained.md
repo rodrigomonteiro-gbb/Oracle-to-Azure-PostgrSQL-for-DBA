@@ -14,7 +14,7 @@ PostgreSQL pgbench Documentation [postgresql.org]
 </br>
 
 ``` powershell
-pgbench --help</br>
+pgbench --help
 ```
 
 </br>
@@ -22,8 +22,8 @@ pgbench --help</br>
 and</br>
 
 </br>
-```powershell
-pgbench --version</br>
+``` powershell
+pgbench --version
 ```
 
 </br>
@@ -34,14 +34,14 @@ Consider this script:</br>
 </br>
 
 ```sql
-SELECT count(*)</br>
-FROM  sales.salesorderheader;</br>
+SELECT count(*)
+FROM  sales.salesorderheader;
 ```
 
 </br>If executed through:
 
 ```powershell
-* pgbench -f myscript.sql -c 1 -j 1 -T 10 adventureworks
+pgbench -f myscript.sql -c 1 -j 1 -T 10 adventureworks
 ```
 
 You will not see the SELECT results.</br>
@@ -76,12 +76,13 @@ pgbench -f workload.sql `
 -c 50 `
 -j 10 `
 -T 300 `
-**-l** `
-adventureworks`
+-l `
+adventureworks
 ```
 
 </br>
-The -l option generates .log files in the folder where PGBench is executed:</br>
+
+The **-l** option generates .log files in the folder where PGBench is executed:</br>
 
 </br>
 
@@ -116,10 +117,12 @@ pgbench -f workload.sql `
 -c 100 `
 -j 20 `
 -T 300 `
-**-r** `
+-r `
 adventureworks`
+```
 
-</br></br>
+</br>
+</br>
 
 ![PGBench detailed report](images/PGBench_04_DetailedReport.png)
 </br>
