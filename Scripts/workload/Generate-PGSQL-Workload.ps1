@@ -11,10 +11,12 @@ $PgBenchExe = "pgbench.exe"
 # Set to $true to capture pgbench stdout, stderr, command details, and exit status.
 $CapturePGBenchDiagnostics = $false
 
-Set-Location \
-Set-Location 'C:\PGSQL_workload_generator'
-$abspath = (Get-Item -Path ".\Generate-PGSQL-Workload.ps1").FullName
-$scriptDir = Split-Path -Parent $abspath
+#srv-workshop-pto-pgsql.postgres.database.azure.com
+#postgres
+#P0stgr3sTcpcep.0123456
+
+$scriptDir = $PSScriptRoot
+$ResultsRoot = Join-Path $scriptDir 'Results'
 add-Type -AssemblyName System.Windows.Forms
 
 # UI form control and properties
@@ -438,7 +440,7 @@ $form.Controls.Add($cancelButton)
 
 
 # read entries from last-execution if file exists
-$lastexecpath = 'exec_PGBENCH.TXT'
+$lastexecpath = Join-Path $scriptDir 'exec_PGBENCH.TXT'
 if (Test-Path -LiteralPath $lastexecpath) {
     $content = Get-Content -Path $lastexecpath
     $textBoxInstance.text = $content[0]
@@ -544,12 +546,13 @@ function Get-ResultsFolder
         # ----------------------------------------------------
         # Output Folder
         # ----------------------------------------------------
+        $WorkloadResultsFolder = Join-Path $ResultsRoot $p_Results_folder
         if ($p_Timestamp -eq "Y") {
             $RunId = Get-Date -Format "yyyyMMdd_HHmmss"
-            $OutputFolder = ".\Results\$p_Results_folder\$RunId"
+            $OutputFolder = Join-Path $WorkloadResultsFolder $RunId
         } else {
             $RunId = ""
-            $OutputFolder = ".\Results\$p_Results_folder"
+            $OutputFolder = $WorkloadResultsFolder
         }
    
         New-Item -ItemType Directory `
@@ -663,9 +666,9 @@ function Start-PgBenchWorkload
 #
 # create Results folder if not exists
 #
-if (-not (Test-Path -LiteralPath ".\Results")) {
+if (-not (Test-Path -LiteralPath $ResultsRoot)) {
     New-Item -ItemType Directory `
-    -Path ".\Results" `
+    -Path $ResultsRoot `
     -Force | Out-Null
 }
 
@@ -761,7 +764,7 @@ while ($true) {
         ##
         ## UPDATE INFO ON exec_PGBENCH.TXT
         ##
-        $lastexecpath = 'exec_PGBENCH.TXT'
+        $lastexecpath = Join-Path $scriptDir 'exec_PGBENCH.TXT'
         #if 1 -eq 1 {
             #if (Test-Path -LiteralPath $lastexecpath) {
             #    Remove-Item -LiteralPath $path -Verbose 
