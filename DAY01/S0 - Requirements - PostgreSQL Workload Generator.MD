@@ -8,7 +8,7 @@
 </br>
 
 PostGreSQL_Workload_Generator is a **Powershell 7**  script that uses a GUI to allow the user to issue queries targetting a PostgreSQL Server. It uses a combination of resources to generate workload against an AdventureWorks database. The resources are:</br>
-To verify if you have **PowerShell 7** follow steps on [](Tools_PowerShell_7.MD)
+To verify if you have **PowerShell 7** follow steps at [Tools PowerShell 7](Tools_PowerShell_7.MD)
 </br>
 
  A series of **SQL scripts**, each one used to target a specific area of PostGreSQL Server. All the necessary demo scripts are in the \SQL folder.</li></br>
