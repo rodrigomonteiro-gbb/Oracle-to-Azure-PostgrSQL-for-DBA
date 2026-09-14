@@ -7,6 +7,7 @@
 ## executables
 $PsqlExe = "C:\Program Files\pgAdmin 4\runtime\psql.exe"
 $PgBenchExe = "pgbench.exe"
+$env:PGSSLMODE = "require"
 
 # Set to $true to capture pgbench stdout, stderr, command details, and exit status.
 $CapturePGBenchDiagnostics = $false
