@@ -10,8 +10,8 @@ PostGreSQL_Workload_Generator is a Powershell script that uses a GUI to allow th
 </br>
 <ul>
 <li>- a series of SQL scripts, each one used to target a specific area of PostGreSQL Server</li>
-<li>- PSQL (part of the [PGADMIN4 utilities](https://www.microsoft.com/en-us/download/104868)) is used to connect to SQL Server and execute one SQL script.</li>
-<li>- PGBENCH (part of the [PGADMIN4 utilities](https://www.microsoft.com/en-us/download/104868)) is used to connect to PostGreSQL Server and execute the SQL scripts. It allows for:
+<li>- PSQL (part of the [PGADMIN4 utilities](https://www.enterprisedb.com/downloads/postgres-postgresql-downloads)) is used to connect to SQL Server and execute one SQL script.</li>
+<li>- PGBENCH (get it here: [Get it here](https://www.enterprisedb.com/downloads/postgres-postgresql-downloads)) is used to connect to PostGreSQL Server and execute the SQL scripts. 
 </ul>
 </br>
 </br>
