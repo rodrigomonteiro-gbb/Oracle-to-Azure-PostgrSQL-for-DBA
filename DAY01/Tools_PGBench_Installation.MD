@@ -3,14 +3,12 @@
 </br>
 1 download the file from: https://www.enterprisedb.com/downloads/postgres-postgresql-downloads</br>
 
-2. :::image type="content" source="images/PGBench_Setup_01_download.png" alt-text="":::
-
 ![Download PGBench](images/PGBench_Setup_01_download.png)
 </br>
 
 3. go to the downloads folder:</br>
 
-![Downloads Folder](images/PGBench_Setup_03_download_folder.png.png)
+![Downloads Folder](images/PGBench_Setup_03_download_folder.png)
 </br>
 
 4. Execute the downloaded file:</br>
