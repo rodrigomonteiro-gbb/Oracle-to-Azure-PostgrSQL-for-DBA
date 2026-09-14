@@ -7,14 +7,55 @@
 
 </br>
 
+### PowerShell 7
 PostGreSQL_Workload_Generator is a **Powershell 7**  script that uses a GUI to allow the user to issue queries targetting a PostgreSQL Server. It uses a combination of resources to generate workload against an AdventureWorks database. The resources are:</br>
 To verify if you have **PowerShell 7** follow steps at [Tools PowerShell 7](Tools_PowerShell_7.MD)
 </br>
+
+**in order to execute the PowerShell script you'll need to change ExecutionPolicy** 
+
+```PowerShell
+ Set-ExecutionPolicy Unrestricted -Scope CurrrentUser
+```
+
+Set-ExecutionPolicy accepts these execution policy values in PowerShell:
+
+| Value | Meaning |
+| Restricted | No scripts can run. This is the most restrictive setting. |
+| AllSigned | All scripts, including locally created scripts, must be digitally signed by a trusted publisher.|
+| RemoteSigned | Local scripts can run; scripts downloaded from the Internet must be signed. This is the default on modern Windows systems.|
+| Unrestricted | All scripts can run. Downloaded scripts trigger a warning before execution.|
+| Bypass | No restrictions, warnings, or prompts. Commonly used for automation or temporary execution.|
+| Undefined | Removes the execution policy setting from the specified scope. |
+
+</br>Effective policy is determined by other scopes or Group Policy.
+Default	Restores the platform default execution policy (typically RemoteSigned on Windows).
+
+#### Common Examples:</br>
+
+```PowerShell
+<# Recommended for most development scenarios #>
+Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
+ 
+<# Temporarily disable restrictions for the current session only #>
+Set-ExecutionPolicy Bypass -Scope Process
+ 
+<# Check current effective policy #>
+Get-ExecutionPolicy
+ 
+<# Show all scopes #>
+Get-ExecutionPolicy -List
+```
+
+### SQL Scripts
 
  A series of **SQL scripts**, each one used to target a specific area of PostGreSQL Server. All the necessary demo scripts are in the \SQL folder.</li></br>
 
  **PSQL** is part of the [PGADMIN4 utilities](https://www.enterprisedb.com/downloads/postgres-postgresql-downloads) is used to connect to SQL Server and execute one SQL script.</li></br>
  To install **PGBench** follow instructions on [](Tools_PGBench_Installation.MD)
+
+
+### PGBench
 
  **PGBENCH** is available at https://www.enterprisedb.com/downloads/postgres-postgresql-downloads. It is used to connect to PostGreSQL Server and execute the SQL scripts with multiple sessions in parallel. </li>
 </ul>
