@@ -6,16 +6,56 @@
 ## Tool Definition
 
 </br>
-PostGreSQL_Workload_Generator is a Powershell script that uses a GUI to allow the user to issue queries targetting a PostgreSQL Server. It uses a combination of resources to generate workload against an AdventureWorks database. The resources are:</br>
+
+PostGreSQL_Workload_Generator is a **Powershell 7**  script that uses a GUI to allow the user to issue queries targetting a PostgreSQL Server. It uses a combination of resources to generate workload against an AdventureWorks database. The resources are:</br>
 </br>
-<ul>
-<li> A series of SQL scripts, each one used to target a specific area of PostGreSQL Server. All the necessary demo scripts are in the \SQL folder.</li></br>
 
-<li> **PSQL** is part of the [PGADMIN4 utilities](https://www.enterprisedb.com/downloads/postgres-postgresql-downloads) is used to connect to SQL Server and execute one SQL script.</li></br>
+ A series of **SQL scripts**, each one used to target a specific area of PostGreSQL Server. All the necessary demo scripts are in the \SQL folder.</li></br>
 
-<li> **PGBENCH** is available at https://www.enterprisedb.com/downloads/postgres-postgresql-downloads. It is used to connect to PostGreSQL Server and execute the SQL scripts with multiple sessions in parallel. </li>
+ **PSQL** is part of the [PGADMIN4 utilities](https://www.enterprisedb.com/downloads/postgres-postgresql-downloads) is used to connect to SQL Server and execute one SQL script.</li></br>
+ To install **PGBench** follow instructions on [](Tools_PGBench_Installation.MD)
+
+ **PGBENCH** is available at https://www.enterprisedb.com/downloads/postgres-postgresql-downloads. It is used to connect to PostGreSQL Server and execute the SQL scripts with multiple sessions in parallel. </li>
 </ul>
+
 </br>
+
+### to verify you have PowerShell 7
+
+</br>
+
+### 1. Check your current version</br>
+
+1.1 execute: $PSVersionTable.PSVersion</br>
+1.2 if you see 5.1.x you are running windows powershell 5.1</br>
+
+### 2. Install PowerShell 7</br>
+
+2.1. In an elevated PowerShell or Command Prompt window: </br>
+winget install Microsoft.PowerShell</br>
+2.2. or </br>
+winget install --id Microsoft.PowerShell -e</br>
+
+### 3. Start PowerShell 7 </br>
+
+After installation, close and reopen your terminal, then run: </br>
+pwsh </br>
+PowerShell 7 installs side-by-side with Windows PowerShell 5.1 and is launched using pwsh.exe. </br>
+
+### 4. Verify </br>
+
+4.1. $PSVersionTable.PSVersion</br>
+4.2. You should now see a version beginning with 7.x.</br>
+
+### 5. (Recommended) Make PowerShell 7 the default in Windows Terminal</br>
+
+Open Windows Terminal Settings (Ctrl+,)</br>
+Go to Startup</br>
+Change Default profile from Windows PowerShell to PowerShell (the PowerShell 7 profile)</br>
+Save and restart Windows Terminal.</br>
+Upgrade an existing PowerShell 7 installation</br>
+If you already have PowerShell 7 and want the latest release:</br>
+winget upgrade Microsoft.PowerShell
 </br>
 </br>
 
@@ -56,7 +96,6 @@ You need to propulate the following fields to allow a connection to PostgreSQL:<
 </br>
 </br>
 
-
 ## Executing the tool
 
 The image below illustrates a connection to an Azure Database for PostgreSQL Flexible Server, using default Port 5432, and pointing to the  AdventureWorks database.</br>
@@ -81,8 +120,7 @@ Notice the input used for this sample execution:</br>
 </ul>
 </br>
 
-
-* the following screenshots contain the PGBENCH execution at launch, 10 seconds, 20 seconds, and 60 seconds. 
+* the following screenshots contain the PGBENCH execution at launch, 10 seconds, 20 seconds, and 60 seconds.
 
 ![PGBench at launch](images/workload-execution-pgbench-00-seconds.png)
 </br>
