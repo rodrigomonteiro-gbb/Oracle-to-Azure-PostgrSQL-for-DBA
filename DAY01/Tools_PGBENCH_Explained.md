@@ -109,7 +109,8 @@ The exact format varies slightly by PostgreSQL version.
 ## 4. PGBench Detailed Report
 
 </br>
-The -r option reports average latency per statement. This is one of the most useful options when tuning a workload. The official documentation describes custom script execution and reporting capabilities. [postgresql.org]</br>
+
+The **-r** option reports average latency per statement. This is one of the most useful options when tuning a workload. The official documentation describes custom script execution and reporting capabilities. [postgresql.org]</br>
 </br>
 
 ```powershell
