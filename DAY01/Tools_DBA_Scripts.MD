@@ -6,6 +6,7 @@
 
 | Script | Use case | Related workload |
 | --- | --- | --- |
+| | overview of pg_stat_activity system view | [pg_stat_activity](Workload_00_pg_stat_activity_Reference.MD) |
 | [DBA_ActivityReview](../Scripts/troubleshooting/DBA_ActivityReview.sql) |  Reviews current PostgreSQL sessions, active queries, wait events, transaction age, query duration, and blocking PIDs. Useful for general real-time workload monitoring. | [Compile Workload](Workload_01_CompileWorkload.MD) |
 | [DBA_BlockingReview](../Scripts/troubleshooting/DBA_BlockingReview.sql) | Diagnoses lock contention by identifying blocked sessions, blocking sessions, lock types, affected objects, blocking duration, and blocker query details. | [Blockers](Workload_04_Blockers.MD) |
 | [DBA_ConnectionAnalysis](../Scripts/troubleshooting/DBA_ConnectionAnalysis.SQL) | Analyzes connection utilization, backend processes, session states, waits, connection capacity, and relevant memory settings. Designed primarily for the connection-test workload. | [Connection Test](Workload_00_Connection_Test.MD) |
