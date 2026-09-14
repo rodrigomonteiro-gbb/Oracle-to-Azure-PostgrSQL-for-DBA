@@ -8,6 +8,9 @@
 $PsqlExe = "C:\Program Files\pgAdmin 4\runtime\psql.exe"
 $PgBenchExe = "pgbench.exe"
 
+# Set to $true to capture pgbench stdout, stderr, command details, and exit status.
+$CapturePGBenchDiagnostics = $false
+
 Set-Location \
 Set-Location 'C:\PGSQL_workload_generator'
 $abspath = (Get-Item -Path ".\Generate-PGSQL-Workload.ps1").FullName
@@ -556,6 +559,106 @@ function Get-ResultsFolder
     return $OutputFolder
 } 
 
+function Start-PgBenchWorkload
+    {
+        param(
+            [Parameter(Mandatory = $true)]
+            [string]$ArgumentList,
+
+            [Parameter(Mandatory = $true)]
+            [string]$WorkingDirectory,
+
+            [Parameter(Mandatory = $true)]
+            [string]$ApplicationName,
+
+            [switch]$Wait
+        )
+
+        $ResolvedOutputFolder = [System.IO.Path]::GetFullPath($WorkingDirectory)
+
+        if (-not $CapturePGBenchDiagnostics) {
+            $StartProcessParameters = @{
+                FilePath = $PgBenchExe
+                WorkingDirectory = $ResolvedOutputFolder
+                WindowStyle = $PGBench_WindowsStyle
+                ArgumentList = $ArgumentList
+                PassThru = $true
+            }
+
+            if ($Wait) {
+                $StartProcessParameters.Wait = $true
+            }
+
+            return Start-Process @StartProcessParameters
+        }
+
+        $ConsoleLogPath = Join-Path $ResolvedOutputFolder 'pgbench_console.log'
+        $ErrorLogPath = Join-Path $ResolvedOutputFolder 'pgbench_error.log'
+        $StatusLogPath = Join-Path $ResolvedOutputFolder 'pgbench_status.txt'
+        $CommandLogPath = Join-Path $ResolvedOutputFolder 'pgbench_command.txt'
+        $StartedAt = Get-Date
+
+        @(
+            "StartedAt=$($StartedAt.ToString('o'))"
+            "ApplicationName=$ApplicationName"
+            "Executable=$PgBenchExe"
+            "Arguments=$ArgumentList"
+            "WorkingDirectory=$ResolvedOutputFolder"
+        ) | Set-Content -LiteralPath $CommandLogPath
+
+        Write-Host "PGBench diagnostics: $ResolvedOutputFolder"
+
+        try {
+            $Process = Start-Process `
+                -FilePath $PgBenchExe `
+                -WorkingDirectory $ResolvedOutputFolder `
+                -WindowStyle $PGBench_WindowsStyle `
+                -ArgumentList $ArgumentList `
+                -RedirectStandardOutput $ConsoleLogPath `
+                -RedirectStandardError $ErrorLogPath `
+                -PassThru
+        } catch {
+            @(
+                "StartedAt=$($StartedAt.ToString('o'))"
+                "CompletedAt=$((Get-Date).ToString('o'))"
+                'ExitCode=START_FAILED'
+                "Error=$($_.Exception.Message)"
+            ) | Set-Content -LiteralPath $StatusLogPath
+            throw
+        }
+
+        if ($Wait) {
+            $Process.WaitForExit()
+            @(
+                "StartedAt=$($StartedAt.ToString('o'))"
+                "CompletedAt=$((Get-Date).ToString('o'))"
+                "ProcessId=$($Process.Id)"
+                "ExitCode=$($Process.ExitCode)"
+            ) | Set-Content -LiteralPath $StatusLogPath
+        } else {
+            $Process.EnableRaisingEvents = $true
+            $EventData = @{
+                StartedAt = $StartedAt
+                StatusLogPath = $StatusLogPath
+            }
+            $null = Register-ObjectEvent `
+                -InputObject $Process `
+                -EventName Exited `
+                -MessageData $EventData `
+                -Action {
+                    @(
+                        "StartedAt=$($Event.MessageData.StartedAt.ToString('o'))"
+                        "CompletedAt=$((Get-Date).ToString('o'))"
+                        "ProcessId=$($Event.Sender.Id)"
+                        "ExitCode=$($Event.Sender.ExitCode)"
+                    ) | Set-Content -LiteralPath $Event.MessageData.StatusLogPath
+                    Unregister-Event -SourceIdentifier $Event.SourceIdentifier
+                }
+        }
+
+        return $Process
+}
+
 
 #
 # create Results folder if not exists
@@ -720,7 +823,7 @@ SELECT pg_stat_clear_snapshot();
                 $OutputFolder = Get-ResultsFolder @($paths, "Y")
                 
                 $arguments = Get-Argument_PGBench($srv, $port, $user, $database , "$scriptDir\SQL\Connection_test.sql" , $clients , $Threads ,$LimitType , $LimitAmount, $paths ,$ShowPGBenchProgress, $ShowPGBenchProgressInterval, $CapturePGBenchLog)
-                $env:PGPASSWORD = $pass; $env:PGAPPNAME=$paths; Start-Process -FilePath $PgBenchExe -WorkingDirectory $OutputFolder -WindowStyle $PGBench_WindowsStyle -ArgumentList $arguments
+                $env:PGPASSWORD = $pass; $env:PGAPPNAME=$paths; $null = Start-PgBenchWorkload -ArgumentList $arguments -WorkingDirectory $OutputFolder -ApplicationName $paths
             }
 
         '1' {    
@@ -728,7 +831,7 @@ SELECT pg_stat_clear_snapshot();
                 $OutputFolder = Get-ResultsFolder @($paths, "Y")
 
                 $arguments = Get-Argument_PGBench($srv, $port, $user, $database , "$scriptDir\SQL\AdventureWorks_Compile_Workload.sql" , $clients , $Threads ,$LimitType , $LimitAmount, $paths ,$ShowPGBenchProgress, $ShowPGBenchProgressInterval, $CapturePGBenchLog)
-                $env:PGPASSWORD = $pass; $env:PGAPPNAME=$paths; Start-Process -FilePath $PgBenchExe -WorkingDirectory $OutputFolder -WindowStyle $PGBench_WindowsStyle -ArgumentList $arguments
+                $env:PGPASSWORD = $pass; $env:PGAPPNAME=$paths; $null = Start-PgBenchWorkload -ArgumentList $arguments -WorkingDirectory $OutputFolder -ApplicationName $paths
             }         
 
         '2' {
@@ -753,7 +856,7 @@ SELECT pg_stat_clear_snapshot();
                 $OutputFolder = Get-ResultsFolder @($paths, "Y")
                 $arguments = Get-Argument_PGBench($srv, $port, $user, $database , "$scriptDir\SQL\AdventureWorks_CPU.sql" , $clients , $Threads ,$LimitType , $LimitAmount,  $paths, $ShowPGBenchProgress, $ShowPGBenchProgressInterval, $CapturePGBenchLog)
                 $env:PGPASSWORD = $pass; $env:PGAPPNAME=$paths
-                $PgBenchProcess = Start-Process -FilePath $PgBenchExe -WorkingDirectory $OutputFolder -WindowStyle $PGBench_WindowsStyle -ArgumentList $arguments -Wait -PassThru
+                $PgBenchProcess = Start-PgBenchWorkload -ArgumentList $arguments -WorkingDirectory $OutputFolder -ApplicationName $paths -Wait
 
                 & $PsqlExe @ArgsPsqlExe --set=ON_ERROR_STOP=1 -f "$scriptDir\SQL\AdventureWorks_CPU - cleanup.sql"
                 $CleanupExitCode = $LASTEXITCODE
@@ -773,19 +876,19 @@ SELECT pg_stat_clear_snapshot();
                 $paths = 'PGBench_SQLCPUPower'
                 $OutputFolder = Get-ResultsFolder @($paths, "Y")
                 $arguments = Get-Argument_PGBench($srv, $port, $user, $database , "$scriptDir\SQL\CPU Busy - Power.sql" , $clients , $Threads ,$LimitType , $LimitAmount,  $paths ,$ShowPGBenchProgress, $ShowPGBenchProgressInterval, $CapturePGBenchLog)
-                $env:PGPASSWORD = $pass; $env:PGAPPNAME=$paths; Start-Process -FilePath $PgBenchExe -WorkingDirectory $OutputFolder -WindowStyle $PGBench_WindowsStyle -ArgumentList $arguments
+                $env:PGPASSWORD = $pass; $env:PGAPPNAME=$paths; $null = Start-PgBenchWorkload -ArgumentList $arguments -WorkingDirectory $OutputFolder -ApplicationName $paths
 
                 # workload 
                 $paths = 'PGBench_SQLCPUCosine'
                 $OutputFolder = Get-ResultsFolder @($paths, "Y")
                 $arguments = Get-Argument_PGBench($srv, $port, $user, $database , "$scriptDir\SQL\CPU Busy - COSine.sql" , $clients , $Threads ,$LimitType , $LimitAmount,  $paths ,$ShowPGBenchProgress, $ShowPGBenchProgressInterval, $CapturePGBenchLog)
-                $env:PGPASSWORD = $pass; $env:PGAPPNAME=$paths; Start-Process -FilePath $PgBenchExe -WorkingDirectory $OutputFolder -WindowStyle $PGBench_WindowsStyle -ArgumentList $arguments
+                $env:PGPASSWORD = $pass; $env:PGAPPNAME=$paths; $null = Start-PgBenchWorkload -ArgumentList $arguments -WorkingDirectory $OutputFolder -ApplicationName $paths
 
                 # workload 
                 $paths = 'PGBench_SQLCPUNumbers' 
                 $OutputFolder = Get-ResultsFolder @($paths, "Y")
                 $arguments = Get-Argument_PGBench($srv, $port, $user, $database , "$scriptDir\SQL\CPU Busy - Numbers Table.sql" , $clients , $Threads ,$LimitType , $LimitAmount,  $paths ,$ShowPGBenchProgress, $ShowPGBenchProgressInterval, $CapturePGBenchLog)
-                $env:PGPASSWORD = $pass; $env:PGAPPNAME=$paths; Start-Process -FilePath $PgBenchExe -WorkingDirectory $OutputFolder -WindowStyle $PGBench_WindowsStyle -ArgumentList $arguments
+                $env:PGPASSWORD = $pass; $env:PGAPPNAME=$paths; $null = Start-PgBenchWorkload -ArgumentList $arguments -WorkingDirectory $OutputFolder -ApplicationName $paths
 
             }
         '4' 
@@ -794,13 +897,13 @@ SELECT pg_stat_clear_snapshot();
                 $OutputFolder = Get-ResultsFolder @($paths, "Y")
                 # workload 
                 $arguments = Get-Argument_PGBench($srv, $port, $user, $database , "$scriptDir\SQL\AdventureWorks_blockers_2A.sql" , $clients , $Threads ,$LimitType , $LimitAmount,  $paths,$ShowPGBenchProgress, $ShowPGBenchProgressInterval, $CapturePGBenchLog)
-                $env:PGPASSWORD = $pass; $env:PGAPPNAME=$paths; Start-Process -FilePath $PgBenchExe -WorkingDirectory $OutputFolder -WindowStyle $PGBench_WindowsStyle -ArgumentList $arguments
+                $env:PGPASSWORD = $pass; $env:PGAPPNAME=$paths; $null = Start-PgBenchWorkload -ArgumentList $arguments -WorkingDirectory $OutputFolder -ApplicationName $paths
 
                 $paths = 'PGBench_blocked_2A'
                 $OutputFolder = Get-ResultsFolder @($paths, "Y")
                 # workload 
                 $arguments = Get-Argument_PGBench($srv, $port, $user, $database , "$scriptDir\SQL\AdventureWorks_blocked_2A.sql" , $clients , $Threads ,$LimitType , $LimitAmount,  $paths,$ShowPGBenchProgress, $ShowPGBenchProgressInterval, $CapturePGBenchLog)
-                $env:PGPASSWORD = $pass; $env:PGAPPNAME=$paths; Start-Process -FilePath $PgBenchExe -WorkingDirectory $OutputFolder -WindowStyle $PGBench_WindowsStyle -ArgumentList $arguments
+                $env:PGPASSWORD = $pass; $env:PGAPPNAME=$paths; $null = Start-PgBenchWorkload -ArgumentList $arguments -WorkingDirectory $OutputFolder -ApplicationName $paths
 
             } 
         '5' 
@@ -817,7 +920,7 @@ SELECT pg_stat_clear_snapshot();
                 $paths = 'PGBench_Sargability_BAD'
                 $OutputFolder = Get-ResultsFolder @($paths, "Y")
                 $arguments = Get-Argument_PGBench($srv, $port, $user, $database , "$scriptDir\SQL\AdventureWorks_Sargability_BAD.sql" , $clients , $Threads ,$LimitType , $LimitAmount,  $paths,$ShowPGBenchProgress, $ShowPGBenchProgressInterval, $CapturePGBenchLog)
-                $env:PGPASSWORD = $pass; $env:PGAPPNAME=$paths; Start-Process -FilePath $PgBenchExe -WorkingDirectory $OutputFolder -WindowStyle $PGBench_WindowsStyle -ArgumentList $arguments -Wait
+                $env:PGPASSWORD = $pass; $env:PGAPPNAME=$paths; $null = Start-PgBenchWorkload -ArgumentList $arguments -WorkingDirectory $OutputFolder -ApplicationName $paths -Wait
 
                 $continueFixed = [System.Windows.Forms.MessageBox]::Show(
                     "The BAD SARGability workload has completed.`n`nContinue with the FIXED workload?",
@@ -836,7 +939,7 @@ SELECT pg_stat_clear_snapshot();
                     $paths = 'PGBench_Sargability_FIXED'
                     $OutputFolder = Get-ResultsFolder @($paths, "Y")
                     $arguments = Get-Argument_PGBench($srv, $port, $user, $database , "$scriptDir\SQL\AdventureWorks_Sargability_FIXED.sql" , $clients , $Threads ,$LimitType , $LimitAmount,  $paths,$ShowPGBenchProgress, $ShowPGBenchProgressInterval, $CapturePGBenchLog)
-                    $env:PGPASSWORD = $pass; $env:PGAPPNAME=$paths; Start-Process -FilePath $PgBenchExe -WorkingDirectory $OutputFolder -WindowStyle $PGBench_WindowsStyle -ArgumentList $arguments
+                    $env:PGPASSWORD = $pass; $env:PGAPPNAME=$paths; $null = Start-PgBenchWorkload -ArgumentList $arguments -WorkingDirectory $OutputFolder -ApplicationName $paths
                 }
 
                 if (Test-Path -LiteralPath $PgPassPath) {
@@ -849,7 +952,7 @@ SELECT pg_stat_clear_snapshot();
                 $OutputFolder = Get-ResultsFolder @($paths, "Y")
                 # workload 
                 $arguments = Get-Argument_PGBench($srv, $port, $user, $database , "$scriptDir\SQL\AdventureWorks_ExecutionPlan.sql" , $clients , $Threads ,$LimitType , $LimitAmount,  $paths,$ShowPGBenchProgress, $ShowPGBenchProgressInterval, $CapturePGBenchLog)
-                $env:PGPASSWORD = $pass; $env:PGAPPNAME=$paths; Start-Process -FilePath $PgBenchExe -WorkingDirectory $OutputFolder -WindowStyle $PGBench_WindowsStyle -ArgumentList $arguments
+                $env:PGPASSWORD = $pass; $env:PGAPPNAME=$paths; $null = Start-PgBenchWorkload -ArgumentList $arguments -WorkingDirectory $OutputFolder -ApplicationName $paths
             }
 
         '7' {
@@ -865,17 +968,17 @@ SELECT pg_stat_clear_snapshot();
                 $paths = 'PGBench_Cursors_PersonAddress'
                 $OutputFolder = Get-ResultsFolder @($paths, "Y")
                 $arguments = Get-Argument_PGBench($srv, $port, $user, $database , "$scriptDir\SQL\AdventureWorks_Cursors_PersonAddress.sql" , $clients , $Threads ,$LimitType , $LimitAmount,  $paths,$ShowPGBenchProgress, $ShowPGBenchProgressInterval, $CapturePGBenchLog)
-                $env:PGPASSWORD = $pass; $env:PGAPPNAME=$paths; Start-Process -FilePath $PgBenchExe -WorkingDirectory $OutputFolder -WindowStyle $PGBench_WindowsStyle -ArgumentList $arguments
+                $env:PGPASSWORD = $pass; $env:PGAPPNAME=$paths; $null = Start-PgBenchWorkload -ArgumentList $arguments -WorkingDirectory $OutputFolder -ApplicationName $paths
 
                 $paths = 'PGBench_Cursors_SalesOrderHeader'
                 $OutputFolder = Get-ResultsFolder @($paths, "Y")
                 $arguments = Get-Argument_PGBench($srv, $port, $user, $database , "$scriptDir\SQL\AdventureWorks_Cursors_SalesOrderHeader.sql" , $clients , $Threads ,$LimitType , $LimitAmount,  $paths,$ShowPGBenchProgress, $ShowPGBenchProgressInterval, $CapturePGBenchLog)
-                $env:PGPASSWORD = $pass; $env:PGAPPNAME=$paths; Start-Process -FilePath $PgBenchExe -WorkingDirectory $OutputFolder -WindowStyle $PGBench_WindowsStyle -ArgumentList $arguments
+                $env:PGPASSWORD = $pass; $env:PGAPPNAME=$paths; $null = Start-PgBenchWorkload -ArgumentList $arguments -WorkingDirectory $OutputFolder -ApplicationName $paths
 
                 $paths = 'PGBench_Cursors_UpdateSalesOrderHeader'
                 $OutputFolder = Get-ResultsFolder @($paths, "Y")
                 $arguments = Get-Argument_PGBench($srv, $port, $user, $database , "$scriptDir\SQL\AdventureWorks_Cursors_UpdateSalesOrderHeader.sql" , $clients , $Threads ,$LimitType , $LimitAmount,  $paths,$ShowPGBenchProgress, $ShowPGBenchProgressInterval, $CapturePGBenchLog)
-                $env:PGPASSWORD = $pass; $env:PGAPPNAME=$paths; Start-Process -FilePath $PgBenchExe -WorkingDirectory $OutputFolder -WindowStyle $PGBench_WindowsStyle -ArgumentList $arguments
+                $env:PGPASSWORD = $pass; $env:PGAPPNAME=$paths; $null = Start-PgBenchWorkload -ArgumentList $arguments -WorkingDirectory $OutputFolder -ApplicationName $paths
             } 
 
         '8' {
@@ -891,7 +994,7 @@ SELECT pg_stat_clear_snapshot();
                 $OutputFolder = Get-ResultsFolder @($paths, "Y")
                 # workload 
                 $arguments = Get-Argument_PGBench($srv, $port, $user, $database , "$scriptDir\SQL\AdventureWorks_Errors.sql" , $clients , $Threads ,$LimitType , $LimitAmount,  $paths,$ShowPGBenchProgress, $ShowPGBenchProgressInterval, $CapturePGBenchLog)
-                $env:PGPASSWORD = $pass; $env:PGAPPNAME=$paths; Start-Process -FilePath $PgBenchExe -WorkingDirectory $OutputFolder -WindowStyle $PGBench_WindowsStyle -ArgumentList $arguments
+                $env:PGPASSWORD = $pass; $env:PGAPPNAME=$paths; $null = Start-PgBenchWorkload -ArgumentList $arguments -WorkingDirectory $OutputFolder -ApplicationName $paths
             } 
 
         '9' {    
@@ -899,7 +1002,7 @@ SELECT pg_stat_clear_snapshot();
                 $OutputFolder = Get-ResultsFolder @($paths, "Y")
                 # workload 
                 $arguments = Get-Argument_PGBench($srv, $port, $user, $database , "$scriptDir\SQL\Stress_TempDB.sql" , $clients , $Threads ,$LimitType , $LimitAmount,  $paths,$ShowPGBenchProgress, $ShowPGBenchProgressInterval, $CapturePGBenchLog)
-                $env:PGPASSWORD = $pass; $env:PGAPPNAME=$paths; Start-Process -FilePath $PgBenchExe -WorkingDirectory $OutputFolder -WindowStyle $PGBench_WindowsStyle -ArgumentList $arguments
+                $env:PGPASSWORD = $pass; $env:PGAPPNAME=$paths; $null = Start-PgBenchWorkload -ArgumentList $arguments -WorkingDirectory $OutputFolder -ApplicationName $paths
             }
 
         'A' {    
@@ -1287,6 +1390,10 @@ SELECT pg_stat_clear_snapshot();
 
             if (Test-Path -LiteralPath "$OutputFolder\pgbench_console.log") {
                 Start-Process notepad.exe -ArgumentList "`"$OutputFolder\pgbench_console.log`""
+            }
+
+            if (Test-Path -LiteralPath "$OutputFolder\pgbench_error.log") {
+                Start-Process notepad.exe -ArgumentList "`"$OutputFolder\pgbench_error.log`""
             }
 
             $firstLogFile = $pgbenchLogFiles | Select-Object -First 1
