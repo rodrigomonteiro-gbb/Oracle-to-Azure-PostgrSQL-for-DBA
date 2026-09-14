@@ -12,10 +12,6 @@ $env:PGSSLMODE = "require"
 # Set to $true to capture pgbench stdout, stderr, command details, and exit status.
 $CapturePGBenchDiagnostics = $false
 
-#srv-workshop-pto-pgsql.postgres.database.azure.com
-#postgres
-#P0stgr3sTcpcep.0123456
-
 $scriptDir = $PSScriptRoot
 $ResultsRoot = Join-Path $scriptDir 'Results'
 add-Type -AssemblyName System.Windows.Forms
