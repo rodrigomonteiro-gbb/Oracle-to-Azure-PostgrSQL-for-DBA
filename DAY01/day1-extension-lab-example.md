@@ -1,141 +1,126 @@
-# Day 1 Lab Example - Extension Management for Oracle DBAs
+# Session 1H: Extension Management [LAB]
 
-## Lab theme
+## Lab Goal
 
-**Question:** Before I say yes to an extension in production, what do I need to know?
+Understand PostgreSQL extensions and apply the Azure Flexible Server sequence: allow the extension, preload it when required, restart when required, and create it in the target database.
 
-This lab is designed for Oracle DBAs moving to Azure Database for PostgreSQL Flexible Server. It teaches extension management as an **operational decision**, not just a feature demo.
+## What Is an Extension?
 
----
+An extension packages SQL objects and, where supported by the service, native functionality as one managed unit. Extensions can add data types, functions, index operator classes, monitoring collectors, schedulers, and complete feature sets.
 
-## What attendees should leave with
+On Azure Database for PostgreSQL Flexible Server, administrators select from a curated list. They do not install arbitrary operating-system packages on the managed server.
 
-By the end of this lab, attendees should be able to:
+## Why Some Extensions Need To Be Enabled First
 
-- classify an extension as **installed**, **available**, **restart-required**, or **unavailable**
-- explain what Oracle-style operational question an extension answers
-- identify whether enabling it requires only database DDL or also a server restart
-- identify who can enable it in production
-- describe rollback, upgrade, and supportability implications
-- decide whether a missing extension is a workaround, a redesign, or a migration blocker
+On self-managed PostgreSQL, a DBA may be used to installing extension packages directly on the host and then running `CREATE EXTENSION`. On Azure Database for PostgreSQL Flexible Server, the operating system and extension binaries are managed by Azure, so the DBA uses supported control-plane settings instead.
 
----
+There are three separate ideas:
 
-## Suggested lab duration
+| Step | Why it exists | Workshop example |
+| --- | --- | --- |
+| Allow-list in `azure.extensions` | Azure must expose the extension as supported for that server before a database can create it. This is a managed-service supportability and safety boundary. | `pg_stat_statements`, `pg_trgm`, `uuid-ossp`, `pgcrypto`, `pgstattuple` |
+| Preload in `shared_preload_libraries` | Some extensions hook into server startup, shared memory, or statement execution. They must be loaded when PostgreSQL starts, not after a session connects. | `pg_stat_statements` |
+| `CREATE EXTENSION` in the database | The extension's SQL objects are created inside one database. Extensions are database-scoped, not automatically installed everywhere on the server. | Create in `adventureworks` |
 
-- **Core lab:** 20-25 minutes
-- **Optional discussion / advanced variation:** 10-15 minutes
+That is why the safe sequence is:
 
----
+> allow-list at the Azure server level -> preload and restart if required -> connect to the target database -> `CREATE EXTENSION`
 
-## Lab structure
+If an extension only adds SQL functions, data types, or index operator classes, it usually does **not** need preload. If it collects server-wide execution statistics or hooks into query execution, it usually **does** need preload.
 
-1. Inventory and classify extensions
-2. Enable one practical extension end to end
-3. Assess operational impact
-4. Decide whether the extension is a migration dependency
-5. Capture the result in a reusable worksheet
+## The Azure Extension Workflow
 
----
+### Step 1: Discover Available Extensions
 
-## Lab prerequisites
-
-Attendees should already have:
-
-- an Azure Database for PostgreSQL Flexible Server environment
-- access to `psql`
-- a role with enough privilege to inspect extensions
-- a user with `azure_pg_admin` membership for enable/disable steps
-- the `orders_demo` database from earlier labs
-
----
-
-## Part 1 - Inventory and classify
-
-### Objective
-
-Separate four states clearly:
-
-- installed in this database
-- available for this server version
-- requires preload/restart
-- unavailable on this platform
-
-### Commands
+Show the Azure allow-list setting:
 
 ```sql
--- Installed in the current database
-\dx
+SHOW azure.extensions;
 ```
 
+Inspect PostgreSQL's extension catalog:
+
 ```sql
--- Everything available for this PostgreSQL version on this server
 SELECT name, default_version, installed_version, comment
 FROM pg_available_extensions
 ORDER BY name;
 ```
 
+List extensions installed in the current database:
+
 ```sql
--- Installed extensions only, with versions
 SELECT extname, extversion
 FROM pg_extension
 ORDER BY extname;
 ```
 
-### Discussion prompts
+Extensions are installed per database. Creating an extension in `postgres` does not automatically create it in `adventureworks`.
 
-Ask attendees to answer out loud (Think Out loud always):
+### Step 2: Allow the Extension
 
-- Which extensions are already installed here?
-- Which are available but not yet enabled?
-- Which business need would require checking the allow-list before promising anything?
-- Is there anything here they expected to see but do not?
+In the Azure portal:
 
----
+1. Open the Flexible Server.
+2. Select **Server parameters**.
+3. Search for `azure.extensions`.
+4. Select the required extension.
+5. Save the parameter.
 
-## Part 2 - Enable one practical extension end to end
+An extension absent from the allow-list cannot be created even if PostgreSQL knows its package name.
 
-### Suggested first example: `pg_stat_statements`
+CLI equivalent, PowerShell:
 
-Why this is the right first example:
-
-- Oracle DBAs instantly recognize the **top SQL / expensive SQL** question
-- it bridges Day 1 into diagnostics and Day 2 into tuning
-- it introduces the preload/restart concept clearly
-
-### Step 1 - Check whether preload is already configured
-
-```sql
-SHOW shared_preload_libraries;
+```powershell
+az postgres flexible-server parameter set `
+  --resource-group <resource-group> `
+  --server-name <server-name> `
+  --name azure.extensions `
+  --value "pg_stat_statements,pg_trgm,uuid-ossp,pgcrypto,pgstattuple"
 ```
 
-If `pg_stat_statements` is not already enabled at the server level, the administrator enables it with the Azure parameter path.
-
-### Azure CLI example
+CLI equivalent, Bash:
 
 ```bash
 az postgres flexible-server parameter set \
   --resource-group <resource-group> \
   --server-name <server-name> \
   --name azure.extensions \
-  --value PG_STAT_STATEMENTS
+  --value "pg_stat_statements,pg_trgm,uuid-ossp,pgcrypto,pgstattuple"
 ```
 
-### Restart note
+Important: setting `azure.extensions` replaces the parameter value. Include every workshop extension that must remain allowed, not only the one you are adding.
 
-Some environments may require a restart after changing preload-related configuration. That must be treated as a **change event**, not as a free action.
+Verify the allow-list from `psql`:
 
-### Step 2 - Create the extension in the target database
+```sql
+SHOW azure.extensions;
+```
+
+### Step 3: Preload When Required
+
+Some extensions must initialize during server startup. Add those extensions to `shared_preload_libraries`, save the setting, and restart the server when prompted.
+
+The workshop extension that requires preload is:
+
+- `pg_stat_statements`
+
+Extensions such as `pg_trgm`, `uuid-ossp`, `pgcrypto`, and `pgstattuple` do not require preload.
+
+### Step 4: Create the Extension
+
+Connect to the intended database:
+
+```powershell
+psql -h <postgresql-fqdn> -U <pgadmin> -d adventureworks
+```
+
+Then create it:
 
 ```sql
 CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
 ```
 
-### Step 3 - Confirm it exists
-
-```sql
-\dx
-```
+Verify:
 
 ```sql
 SELECT extname, extversion
@@ -143,200 +128,458 @@ FROM pg_extension
 WHERE extname = 'pg_stat_statements';
 ```
 
-### Step 4 - Use it to answer a real DBA question
+## The Two Classic Errors
+
+### Error 1: Extension Is Not Allowed
+
+Typical cause: the extension was not selected in `azure.extensions`.
+
+Resolution:
+
+1. Add the extension to `azure.extensions`.
+2. Save the server parameter.
+3. Retry `CREATE EXTENSION` in the target database.
+
+### Error 2: Extension Must Be Preloaded
+
+Typical cause: the extension requires `shared_preload_libraries` but was created before preload and restart.
+
+Resolution:
+
+1. Add it to `shared_preload_libraries`.
+2. Save and restart the Flexible Server.
+3. Reconnect to the target database.
+4. Run `CREATE EXTENSION` again.
+
+The complete sequence is:
+
+> Allow-list -> preload if required -> restart if required -> `CREATE EXTENSION` in each target database
+
+## pg_stat_statements
+
+This extension collects normalized, cumulative execution statistics.
 
 ```sql
-SELECT query,
-       calls,
-       total_exec_time,
-       mean_exec_time,
-       rows
+CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+
+SELECT calls,
+ROUND(total_exec_time::numeric, 2) AS total_ms,
+ROUND(mean_exec_time::numeric, 2) AS mean_ms,
+LEFT(query, 120) AS query
 FROM pg_stat_statements
 ORDER BY total_exec_time DESC
 LIMIT 10;
 ```
 
-### Discussion prompts
+Azure setup also requires:
 
-Ask attendees:
+- `pg_stat_statements` selected in `azure.extensions`
+- `pg_stat_statements` included in `shared_preload_libraries`
+- `pg_stat_statements.track = all` so statements are collected; if this is `none`, `pg_stat_statements` can be installed and preloaded but still return zero rows
 
-- What Oracle operational question does this answer?
-- Did this require only database DDL, or also server-level change?
-- Who should be allowed to enable this in production?
-- Would you enable this by default on a production server? Why?
+Important: `shared_preload_libraries` is a comma-separated server parameter. Do not remove existing Azure-managed entries when adding `pg_stat_statements`; append it to the current value if it is missing.
 
----
+CLI setup, PowerShell:
 
-## Part 3 - Assess operational impact like a production DBA
+```powershell
+az postgres flexible-server parameter set `
+  --resource-group <resource-group> `
+  --server-name <server-name> `
+  --name azure.extensions `
+  --value "pg_stat_statements,pg_trgm,uuid-ossp,pgcrypto,pgstattuple"
 
-### Objective
+az postgres flexible-server parameter set `
+  --resource-group <resource-group> `
+  --server-name <server-name> `
+  --name shared_preload_libraries `
+  --value "pg_cron,pg_stat_statements,azure,pg_qs,pgaadauth,pgms_stats,pgms_wait_sampling,pg_availability"
 
-Move beyond syntax. Treat extension enablement as a production decision.
-
-### Questions to answer
-
-For the extension just enabled, attendees should record:
-
-- What operational problem does it solve?
-- Does it require restart?
-- Does it introduce overhead?
-- Does it change upgrade planning?
-- Does it change backup / restore assumptions?
-- Can an application team self-manage it?
-- What would rollback mean?
-
-### Example prompt text
-
-> `pg_stat_statements` is not just a feature. It changes what evidence is available to the DBA team and may require platform-level enablement. That makes it both an observability decision and an operations decision.
-
----
-
-## Part 4 - Decide whether the extension is a migration dependency
-
-### Objective
-
-Teach attendees to classify dependency risk early.
-
-### Example capability mapping exercise
-
-Ask attendees where each requirement lands:
-
-| Requirement | Likely answer |
-|---|---|
-| Top SQL history | `pg_stat_statements` and Query Store |
-| Scheduler-like behavior | `pg_cron` if supported, otherwise Azure-native scheduling |
-| Spatial support | `PostGIS` if supported |
-| Text similarity / trigram search | `pg_trgm` |
-| Custom package logic | schema-scoped functions / PL/pgSQL |
-| Custom host-level component | likely redesign or unsupported in managed service |
-
-### Discussion prompts
-
-For each item, ask:
-
-- Is this core PostgreSQL, an extension, an Azure service, or a redesign?
-- If it is missing, is that a workaround, a migration blocker, or a design-change item?
-- At what phase should this be discovered?
-
----
-
-## Part 5 - Rollback, versioning, and lifecycle
-
-### Objective
-
-Teach the questions Oracle DBAs ask after the feature demo.
-
-### Rollback example
-
-```sql
-DROP EXTENSION IF EXISTS pg_stat_statements;
+az postgres flexible-server parameter set `
+  --resource-group <resource-group> `
+  --server-name <server-name> `
+  --name pg_stat_statements.track `
+  --value "all"
 ```
 
-### Important discussion point
+CLI setup, Bash:
 
-Dropping an extension is **not always the same as undoing everything**:
+```bash
+az postgres flexible-server parameter set \
+  --resource-group <resource-group> \
+  --server-name <server-name> \
+  --name azure.extensions \
+  --value "pg_stat_statements,pg_trgm,uuid-ossp,pgcrypto,pgstattuple"
 
-- dependent objects may be removed
-- preload configuration may still remain
-- support or monitoring expectations may already have changed
+az postgres flexible-server parameter set \
+  --resource-group <resource-group> \
+  --server-name <server-name> \
+  --name shared_preload_libraries \
+  --value "pg_cron,pg_stat_statements,azure,pg_qs,pgaadauth,pgms_stats,pgms_wait_sampling,pg_availability"
 
-### Version check
+az postgres flexible-server parameter set \
+  --resource-group <resource-group> \
+  --server-name <server-name> \
+  --name pg_stat_statements.track \
+  --value "all"
+```
+
+Restart the Flexible Server if the portal or CLI reports that `shared_preload_libraries` requires it. Then reconnect to `adventureworks` and run `CREATE EXTENSION`.
+
+If validation shows `pg_stat_statements.track = none`, fix that parameter first; no pgbench workload will appear while tracking is disabled.
+
+### Generate pg_stat_statements Activity with pgbench
+
+After `pg_stat_statements` is enabled and created in `adventureworks`, use `pgbench` with a short inline AdventureWorks workload to generate repeatable query activity.
+
+Important: `pgbench` is not a SQL command. Run it from PowerShell or Bash, not from inside `psql`. The order is:
+
+1. In `psql`, optionally reset `pg_stat_statements`.
+2. Exit `psql` with `\q`.
+3. In PowerShell or Bash, create the temporary `pgbench` script and run `pgbench`.
+4. Reconnect with `psql` and inspect `pg_stat_statements`.
+
+Optional reset before the `pgbench` run:
 
 ```sql
+SELECT pg_stat_statements_reset();
+```
+
+If your prompt starts with `adventureworks=>` or `AdventureWorks=>`, exit `psql` before running `pgbench`:
+
+```sql
+\q
+```
+
+PowerShell:
+
+```powershell
+$PgBenchScript = Join-Path $env:TEMP "pgbench_adventureworks_pg_stat_statements.sql"
+
+@'
+\set status random(1, 5)
+\set min_total random(100, 5000)
+\set product_id random(700, 999)
+\set territory_id random(1, 10)
+
+SELECT h.salesorderid,
+       h.customerid,
+       h.orderdate,
+       h.status,
+       h.totaldue
+FROM sales.salesorderheader h
+WHERE h.status = :status
+  AND h.totaldue >= :min_total
+ORDER BY h.orderdate DESC
+LIMIT 25;
+
+SELECT d.productid,
+       count(*) AS line_count,
+       sum(d.linetotal) AS product_revenue
+FROM sales.salesorderdetail d
+JOIN sales.salesorderheader h
+  ON h.salesorderid = d.salesorderid
+WHERE d.productid = :product_id
+GROUP BY d.productid;
+
+SELECT c.territoryid,
+       count(DISTINCT h.salesorderid) AS orders,
+       sum(h.totaldue) AS revenue
+FROM sales.customer c
+JOIN sales.salesorderheader h
+  ON h.customerid = c.customerid
+WHERE c.territoryid = :territory_id
+GROUP BY c.territoryid;
+
+SELECT h.customerid,
+       count(*) AS order_count,
+       sum(h.totaldue) AS lifetime_value
+FROM sales.salesorderheader h
+GROUP BY h.customerid
+ORDER BY lifetime_value DESC
+LIMIT 50;
+'@ | Set-Content -Path $PgBenchScript -Encoding ascii
+
+pgbench -h <postgresql-fqdn> -U <pgadmin> -d adventureworks -c 4 -j 2 -T 60 -f $PgBenchScript
+```
+
+PowerShell example:
+
+```powershell
+$PgBenchScript = Join-Path $env:TEMP "pgbench_adventureworks_pg_stat_statements.sql"
+pgbench -h rodpgsqldemo01.postgres.database.azure.com -U rodadmin -d AdventureWorks -c 4 -j 2 -T 60 -f $PgBenchScript
+```
+
+Bash:
+
+```bash
+cat > /tmp/pgbench_adventureworks_pg_stat_statements.sql <<'SQL'
+\set status random(1, 5)
+\set min_total random(100, 5000)
+\set product_id random(700, 999)
+\set territory_id random(1, 10)
+
+SELECT h.salesorderid,
+       h.customerid,
+       h.orderdate,
+       h.status,
+       h.totaldue
+FROM sales.salesorderheader h
+WHERE h.status = :status
+  AND h.totaldue >= :min_total
+ORDER BY h.orderdate DESC
+LIMIT 25;
+
+SELECT d.productid,
+       count(*) AS line_count,
+       sum(d.linetotal) AS product_revenue
+FROM sales.salesorderdetail d
+JOIN sales.salesorderheader h
+  ON h.salesorderid = d.salesorderid
+WHERE d.productid = :product_id
+GROUP BY d.productid;
+
+SELECT c.territoryid,
+       count(DISTINCT h.salesorderid) AS orders,
+       sum(h.totaldue) AS revenue
+FROM sales.customer c
+JOIN sales.salesorderheader h
+  ON h.customerid = c.customerid
+WHERE c.territoryid = :territory_id
+GROUP BY c.territoryid;
+
+SELECT h.customerid,
+       count(*) AS order_count,
+       sum(h.totaldue) AS lifetime_value
+FROM sales.salesorderheader h
+GROUP BY h.customerid
+ORDER BY lifetime_value DESC
+LIMIT 50;
+SQL
+
+pgbench -h <postgresql-fqdn> -U <pgadmin> -d adventureworks -c 4 -j 2 -T 60 -f /tmp/pgbench_adventureworks_pg_stat_statements.sql
+```
+
+Bash example:
+
+```bash
+pgbench -h rodpgsqldemo01.postgres.database.azure.com -U rodadmin -d AdventureWorks -c 4 -j 2 -T 60 -f /tmp/pgbench_adventureworks_pg_stat_statements.sql
+```
+
+Then reconnect with `psql` to the same database name used by `pgbench` and inspect the normalized statements. For this environment, if `pgbench` used `-d AdventureWorks`, query `pg_stat_statements` from `AdventureWorks` too.
+
+```sql
+SELECT calls,
+       round(total_exec_time::numeric, 2) AS total_ms,
+       round(mean_exec_time::numeric, 2) AS mean_ms,
+       rows,
+       left(query, 160) AS query
+FROM pg_stat_statements
+WHERE query NOT ILIKE '%pg_stat_statements%'
+ORDER BY total_exec_time DESC
+LIMIT 10;
+```
+
+Teaching point: `pgbench` is only creating a monitoring signal here. The goal is not a benchmark score; it is to show how repeated application-style SQL becomes ranked evidence in `pg_stat_statements`.
+
+If the result is empty, check these in order:
+
+```sql
+-- 1. Confirm you are querying the same database that pgbench used.
+SELECT current_database();
+
+-- 2. Confirm the extension exists in this database.
 SELECT extname, extversion
 FROM pg_extension
-ORDER BY extname;
+WHERE extname = 'pg_stat_statements';
+
+-- 3. Confirm the library was preloaded. If this does not include pg_stat_statements,
+-- add it to shared_preload_libraries and restart the Flexible Server.
+SHOW shared_preload_libraries;
+
+-- 4. Confirm tracking is enabled.
+SHOW pg_stat_statements.track;
+
+-- 5. Remove the filter and check whether anything is being tracked at all.
+SELECT count(*) AS tracked_statement_count
+FROM pg_stat_statements;
+
+-- 6. Generate one simple statement from this same psql session.
+SELECT count(*)
+FROM sales.salesorderheader;
+
+SELECT calls,
+       round(total_exec_time::numeric, 2) AS total_ms,
+       round(mean_exec_time::numeric, 2) AS mean_ms,
+       rows,
+       left(query, 160) AS query
+FROM pg_stat_statements
+ORDER BY total_exec_time DESC
+LIMIT 10;
 ```
 
-### Discussion prompts
+Common causes:
 
-Ask attendees:
+1. `pgbench` connected to a different database name than the `psql` session. Use one database name consistently, normally `adventureworks`.
+2. `pg_stat_statements` was created, but `shared_preload_libraries` was not set or the server was not restarted afterward.
+3. `pg_stat_statements.track` is set to `none`, which disables statement collection even when the extension is installed and preloaded.
+4. `SELECT pg_stat_statements_reset();` was run after `pgbench`, clearing the evidence.
+5. `pgbench` started but did not execute transactions. Check that the PowerShell command prints transaction counts and not connection or script errors.
 
-- Is extension versioning the same thing as PostgreSQL major version? No.
-- Could an extension delay or complicate a future upgrade? Yes.
-- Should extension inventory be part of migration assessment? Absolutely.
+If `SELECT count(*) FROM sales.salesorderheader;` returns rows but `pg_stat_statements` is still empty, prove whether tracking is active with a minimal same-session test:
 
----
+```sql
+SHOW shared_preload_libraries;
+SHOW pg_stat_statements.track;
+SHOW pg_stat_statements.track_utility;
+SHOW compute_query_id;
 
-## Reusable extension decision worksheet
+SELECT pg_stat_statements_reset();
+SELECT 1 AS pgss_smoke_test;
 
-Attendees can copy this table into their runbook or migration backlog.
+SELECT calls,
+       rows,
+       left(query, 160) AS query
+FROM pg_stat_statements
+ORDER BY calls DESC
+LIMIT 10;
+```
 
-| Extension / capability | Installed now | Available here | Needs restart | Required privilege | Operational purpose | Support / upgrade risk | Migration blocker if missing |
-|---|---|---|---|---|---|---|---|
-| pg_stat_statements |  |  |  |  |  |  |  |
-| pg_cron |  |  |  |  |  |  |  |
-| postgis |  |  |  |  |  |  |  |
-| pg_trgm |  |  |  |  |  |  |  |
-| custom requirement |  |  |  |  |  |  |  |
+Expected result: the `SELECT $1 AS pgss_smoke_test` or similar normalized statement appears. If it does not, `pg_stat_statements` is not actively tracking statements yet; fix `shared_preload_libraries`, restart the server, confirm `pg_stat_statements.track` is not `none`, reconnect, and test again before running `pgbench`.
 
----
+## pg_trgm
 
-## Instructor prompts
+`pg_trgm` provides trigram similarity and index support for fuzzy matching and wildcard text searches.
 
-These questions usually create the best Oracle DBA discussion:
+```sql
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
-1. Is this more like an Oracle option, a package, or a plugin?
-2. Is it already installed, only available, or unavailable here?
-3. Does enabling it require restart?
-4. Who can enable it in production?
-5. What changes operationally if we enable it?
-6. What does rollback actually mean?
-7. Does it create upgrade or supportability risk?
-8. If it is missing, is that a workaround, a redesign, or a migration blocker?
+CREATE INDEX idx_aw_emailaddress_trgm
+ON person.emailaddress USING gin (emailaddress gin_trgm_ops);
 
----
+SELECT p.businessentityid,
+       p.firstname,
+       p.lastname,
+       e.emailaddress
+FROM person.person p
+JOIN person.emailaddress e
+  ON e.businessentityid = p.businessentityid
+WHERE e.emailaddress LIKE '%adventure-works%';
+```
 
-## Suggested “what good looks like” criteria
+Similarity search:
 
-Attendees should be able to:
+```sql
+SELECT businessentityid,
+       firstname,
+       lastname,
+       similarity(lastname, 'Smith') AS similarity_score
+FROM person.person
+WHERE lastname % 'Smith'
+ORDER BY similarity_score DESC
+LIMIT 10;
+```
 
-- name one extension that answers a real DBA question
-- distinguish **installed** from **available**
-- identify whether an extension requires restart
-- state who owns the enablement decision
-- explain why unsupported extensions must be caught before cutover
-- fill in the decision worksheet for at least three capabilities
+Clean up the demonstration index:
 
----
+```sql
+DROP INDEX IF EXISTS idx_aw_emailaddress_trgm;
+```
 
-## Optional advanced variation
+## UUID Generation
 
-If time allows, add a second extension and compare it with `pg_stat_statements`:
+PostgreSQL 18 provides `gen_random_uuid()` without requiring an extension:
 
-- `pg_trgm` for text-search or similarity use cases
-- `pg_cron` for scheduler-style discussion
-- `postgis` for spatial workloads if relevant to the audience
+```sql
+SELECT gen_random_uuid();
+```
 
-Ask the room to compare:
+Install `uuid-ossp` for additional UUID algorithms:
 
-- observability value
-- privilege requirements
-- restart requirement
-- migration criticality
-- operational risk
+```sql
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+SELECT uuid_generate_v4();
+SELECT uuid_generate_v1();
+```
 
----
+## pgcrypto
 
-## What this lab answers - and what comes next
+`pgcrypto` provides hashing, encryption functions, and secure random bytes:
 
-This lab is designed to answer the **first production questions** a DBA should ask before saying yes to an extension:
+```sql
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
-- is it supported here?
-- is it already installed, only available, or unavailable?
-- does it require restart?
-- who can enable it?
-- what changes operationally if we enable it?
-- is it a migration blocker if missing?
+SELECT crypt('my_password', gen_salt('bf', 10)) AS password_hash;
+SELECT encode(gen_random_bytes(32), 'hex') AS random_token;
+```
 
-It is **not** meant to exhaust every deep extension engineering question on Day 1. Senior DBA follow-up questions usually include:
+Hash workshop email addresses for an anonymized export:
 
-- how extension compatibility affects major version upgrades
-- which extensions should be safe production defaults
-- what the supportability difference is between common and niche extensions
-- when an extension requirement should become application redesign or Azure-service design
-- how extension lifecycle should be governed in production
+```sql
+SELECT businessentityid,
+       encode(digest(emailaddress, 'sha256'), 'hex') AS email_hash
+FROM person.emailaddress
+LIMIT 5;
+```
 
-## Suggested closing line
+## pgstattuple
 
-**An extension is never just a feature choice. On a managed PostgreSQL service, it is also a support, upgrade, and migration decision.**
+`pgstattuple` is used in Day 2 to measure dead tuples and bloat on the AdventureWorks MVCC lab table.
+
+Allow-list it before Day 2:
+
+PowerShell:
+
+```powershell
+az postgres flexible-server parameter set `
+  --resource-group <resource-group> `
+  --server-name <server-name> `
+  --name azure.extensions `
+  --value "pg_stat_statements,pg_trgm,uuid-ossp,pgcrypto,pgstattuple"
+```
+
+Bash:
+
+```bash
+az postgres flexible-server parameter set \
+  --resource-group <resource-group> \
+  --server-name <server-name> \
+  --name azure.extensions \
+  --value "pg_stat_statements,pg_trgm,uuid-ossp,pgcrypto,pgstattuple"
+```
+
+Create it in `adventureworks`:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS pgstattuple;
+```
+
+## Workshop Extension Reference
+
+| Extension | Why we enable it | Allow-list required | Preload required | Create in database |
+| --- | --- | --- | --- | --- |
+| `pg_stat_statements` | Needed for top-SQL evidence, Query Store comparison, and Day 2 runbook cases. It tracks normalized statement execution statistics. | Yes | Yes | Yes, in `adventureworks` |
+| `pg_trgm` | Used to demonstrate PostgreSQL operator-class extensions, fuzzy text search, and GIN indexing on AdventureWorks email/name data. | Yes | No | Yes, in `adventureworks` |
+| `uuid-ossp` | AdventureWorks uses UUID values and this extension demonstrates compatibility with older UUID-generation patterns. | Yes | No | Yes, in `adventureworks` if not already restored |
+| `pgcrypto` | Used for hashing/anonymizing sample email data and demonstrating secure random/hash functions. | Yes | No | Yes, in `adventureworks` |
+| `pgstattuple` | Needed for the Day 2 MVCC/bloat lab to quantify dead tuples and table bloat beyond the approximate `pg_stat_user_tables` counters. | Yes | No | Yes, in `adventureworks` |
+
+Do not introduce extra extensions during this lab. The point is to teach the managed-service extension workflow using extensions the workshop actually uses.
+
+## Remove Optional Lab Extensions
+
+```sql
+DROP EXTENSION IF EXISTS pg_trgm;
+DROP EXTENSION IF EXISTS pgcrypto;
+```
+
+Keep `pg_stat_statements`, `pgstattuple`, and `uuid-ossp`; later workshop sessions or AdventureWorks objects can depend on them.
+
+## Lab Completion Checklist
+
+- Available and installed extensions can be listed.
+- The Azure allow-list step is understood.
+- Extensions requiring preload can be identified.
+- `pg_stat_statements` is installed in `adventureworks`.
+- The workshop allow-list includes `pg_stat_statements`, `pg_trgm`, `uuid-ossp`, `pgcrypto`, and `pgstattuple`.
+- The two common failure modes can be diagnosed.
+- Optional extensions and demonstration objects are removed when no longer needed.
