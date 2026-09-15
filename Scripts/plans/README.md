@@ -52,8 +52,11 @@ translation inline, because the message of the session is:
 | extended stats / column groups | `CREATE STATISTICS` |
 | function-based index | expression index — `CREATE INDEX ON t ((expr))` |
 
-No Oracle equivalent — lead with these: **Bitmap Heap Scan**, **partial
-indexes**, **Memoize**, **Incremental Sort**.
+No Oracle equivalent: </br>
+**Bitmap Heap Scan** </br>
+**partial indexes** </br>
+**Memoize** </br>
+**Incremental Sort**. </br>
 
 ---
 
