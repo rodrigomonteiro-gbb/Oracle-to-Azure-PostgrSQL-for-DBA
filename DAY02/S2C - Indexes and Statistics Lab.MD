@@ -12,7 +12,7 @@ In this lab, you will run a series of PostgreSQL scripts that demonstrate:
 - Extended statistics and statistics lifecycle
 - A complete tuning scenario
 
-The scripts use the AdventureWorks database and are located in the `indexes` folder.
+The scripts use the AdventureWorks database and are located in the `scripts\indexes` folder.
 
 ## Important: How to Run These Scripts
 
