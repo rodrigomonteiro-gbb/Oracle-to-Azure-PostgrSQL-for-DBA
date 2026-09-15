@@ -11,8 +11,8 @@
 --   INDEX_STATS / VALIDATE STRUCTURE    -> pgstattuple, pgstatindex
 -- =====================================================================
 
--- \pset pager off
--- \timing on
+--\pset pager off
+--\timing on
 
 -- \echo ''
 -- \echo '################################################################'
@@ -57,7 +57,7 @@ SELECT schemaname || '.' || relname                     AS table_name,
 FROM pg_stat_user_tables
 WHERE schemaname IN ('sales','person','production','humanresources','purchasing')
 ORDER BY pg_indexes_size(relid) DESC
-LIMIT 15;
+LIMIT 25;
 
 -- \echo ''
 -- \echo '   pct_of_heap over ~100% means more index than data. Sometimes'
@@ -175,10 +175,41 @@ LIMIT 15;
 -- \echo '# 7. Extended statistics objects already defined                #'
 -- \echo '################################################################'
 
-SELECT statistics_schema || '.' || statistics_name AS stats_object,
+SELECT statistics_schemaname || '.' || statistics_name AS stats_object,
        tablename, attnames, kinds
 FROM pg_stats_ext
 ORDER BY 1;
+
+
+-- \echo ''
+-- \echo '##################################################################'
+-- \echo '# 8. Create a copy of salesorderheader and define extended stats #'
+-- \echo '##################################################################'
+
+DROP TABLE IF EXISTS public.d2runbook_salesorderheader;
+CREATE TABLE public.d2runbook_salesorderheader AS
+SELECT *FROM sales.salesorderheader;
+ALTER TABLE public.d2runbook_salesorderheader  ADD PRIMARY KEY (salesorderid);ANALYZE public.d2runbook_salesorderheader;
+
+CREATE STATISTICS IF NOT EXISTS public.d2runbook_soh_status_orderdate_stats  (dependencies, ndistinct) ON status, orderdate 
+FROM public.d2runbook_salesorderheader;
+ANALYZE public.d2runbook_salesorderheader;
+
+SELECT schemaname,
+       tablename,
+       statistics_name,
+       attnames,
+       kinds
+FROM pg_stats_ext
+WHERE schemaname = 'public'
+  AND tablename = 'd2runbook_salesorderheader';
+
+SELECT statistics_schemaname || '.' || statistics_name AS stats_object,
+       tablename, attnames, kinds
+FROM pg_stats_ext
+ORDER BY 1;
+
+
 
 -- \echo ''
 -- \echo '   Usually empty on a migrated database - and that is exactly the'
@@ -189,7 +220,7 @@ ORDER BY 1;
 
 -- \echo ''
 -- \echo '################################################################'
--- \echo '# 8. Global settings that govern all of this                    #'
+-- \echo '# 9. Global settings that govern all of this                    #'
 -- \echo '################################################################'
 
 SELECT name, setting, unit, boot_val AS default_value

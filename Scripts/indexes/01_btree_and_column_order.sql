@@ -222,3 +222,4 @@ ORDER BY pg_relation_size(i.indexrelid) DESC;
 -- \echo ''
 -- \echo '>>> NEXT: 02_index_types.sql'
 -- \echo ''
+
