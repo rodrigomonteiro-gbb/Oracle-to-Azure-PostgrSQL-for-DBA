@@ -9,27 +9,6 @@ translation inline, because the message of the session is:
 > `INDEX RANGE SCAN` / `HASH JOIN`.
 > **The habit of hunting a wrong row estimate is identical.**
 
----
-
-## Run them
-
-```powershell
-cd "<folder with the scripts>"
-$env:PGPASSWORD = "<admin password>"
-
-.\03_plans.ps1 -Script list          # all scripts + suggested running order
-.\03_plans.ps1 -Script discovery     # ALWAYS run this first
-.\03_plans.ps1 -Script seqscan -Capture
-.\03_plans.ps1 -Interactive          # live psql, step through with \i
-.\03_plans.ps1 -Script cleanup       # when finished
-```
-
-Or straight from psql:
-```
-\i plans/02_seqscan_vs_index.sql
-```
-
----
 
 ## The scripts
 
@@ -47,55 +26,6 @@ Or straight from psql:
 | 09 | `09_full_scenario.sql` | **Finale.** One query, five tuning rounds, costs recorded each round |
 | 99 | `99_cleanup.sql` | Drops every `ix_demo_*` / `stx_demo_*`, resets stats targets |
 
----
-
-## Safety
-
-- Every index is named `ix_demo_*`, every extended-stats object `stx_demo_*` —
-  `99_cleanup.sql` finds and drops them by pattern.
-- All `SET` commands (`work_mem`, `enable_seqscan`, `enable_hashjoin`,
-  `max_parallel_workers_per_gather`) are **session-scoped**. Closing psql clears
-  them; the server is never reconfigured.
-- The only writes are in `08_index_tradeoffs.sql`, wrapped in
-  `BEGIN; … ROLLBACK;`.
-- **No AdventureWorks row or original index is ever modified.**
-
-Verify anything is left behind:
-```sql
-SELECT * FROM pg_indexes WHERE indexname LIKE 'ix\_demo\_%';
-```
-
----
-
-## Before you present — two things that will bite you
-
-**1. Check which indexes already exist.** AdventureWorks ports differ. Some
-create only PK/FK constraints; others include the SQL Server secondary indexes.
-If `orderdate` is already indexed, script 02 shows an Index Scan from the start
-and the before/after evaporates.
-
-```powershell
-.\03_plans.ps1 -Script discovery
-```
-
-Each script names an alternate column where one exists. If the port is heavily
-indexed, the safest untouched columns are usually `totaldue`, `duedate`, and
-`status` on `salesorderheader`.
-
-**2. Table size sets expectations.** `salesorderheader` is ~31k rows and
-`salesorderdetail` ~121k. On a modern server these fit in cache, so *elapsed
-times are small* — which is why the scripts teach you to compare **cost and
-buffers**, not milliseconds. Say so up front and the small numbers stop being a
-distraction:
-
-> "These tables are small enough to sit in memory, so I'm going to read cost and
-> buffer counts rather than milliseconds. On your 400 GB table the same plan
-> shapes produce the same decisions — the ratios hold, the absolute numbers don't."
-
-Want bigger numbers? Run the CPU/write workloads from `01_workloads.ps1` in
-another window first so the cache is contended.
-
----
 
 ## Oracle → PostgreSQL reference
 
@@ -140,7 +70,7 @@ indexes**, **Memoize**, **Incremental Sort**.
 
 ---
 
-## Talking points that land
+## Things to consider
 
 **On cost:** "Cost is in arbitrary planner units, not milliseconds. It's only
 meaningful compared against another plan for the same query — which is exactly
