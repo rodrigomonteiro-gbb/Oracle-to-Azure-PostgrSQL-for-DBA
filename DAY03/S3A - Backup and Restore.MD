@@ -2,13 +2,13 @@
 ## Azure Database for PostgreSQL – Flexible Server
 ### Workshop for Oracle DBAs moving to Azure PostgreSQL
 
-**Audience:** Experienced Oracle DBAs (RMAN, Data Guard, Flashback, ARCHIVELOG)
-**Goal:** Be able to explain, configure, test and defend a backup/recovery strategy on Azure Database for PostgreSQL – Flexible Server on day one.
-**Format:** ~90 minutes — concepts (30 min), demos/labs (45 min), Q&A + checklist (15 min)
+**Audience:** Experienced Oracle DBAs (RMAN, Data Guard, Flashback, ARCHIVELOG)</br>
+**Goal:** Be able to explain, configure, test and defend a backup/recovery strategy on Azure Database for PostgreSQL – Flexible Server on day one.</br>
+
 
 ---
 
-## 0. The one-slide mental model
+## 0. Mental model
 
 > In Oracle you **own** the backup. In Azure PostgreSQL Flexible Server the platform **owns** the backup — you own the **retention policy, the redundancy choice, and the recovery drill.**
 
@@ -59,18 +59,42 @@
 
 #### Modifying and Saving backup retention
 
+1 move the slider up to **35 days**</br>
+2 **save**.</br>
+
+
 ![Changed Backup Retention](images/backup-03-ChangedRetention-Save.png)
 
-
-
 ### 1.4 Redundancy options
+
+> ⚠️ **Common regret:** **Geo-redundant backup can only be selected when the server is created and cannot be changed afterwards.**</br> If cross-region recoverability is a requirement, it must be decided at provisioning time. (Retention days *can* be changed later; redundancy cannot.)
+
+
 | Option | What it does | When it is chosen |
 |---|---|---|
 | **Zone-redundant** | 3 copies in the server's AZ + replication to another AZ; ~12 nines durability | Default in regions with availability zones |
 | **Locally redundant (LRS)** | Multiple copies in the same datacenter; ~11 nines | Default in regions without AZs, and default for same-zone HA / no-HA servers |
 | **Geo-redundant (GRS)** | Also replicated to the Azure paired region; ~16 nines; enables cross-region restore | **Opt-in at server creation only** |
 
-> ⚠️ **Teaching point / common regret:** **Geo-redundant backup can only be selected when the server is created and cannot be changed afterwards.** If cross-region recoverability is a requirement, it must be decided at provisioning time. (Retention days *can* be changed later; redundancy cannot.)
+
+#### Settings when creating new Flexible server
+
+![Current Backup Retention](images/backup-04-InitialConfiguration.png)
+
+#### Changing backup retention at creation
+
+![Changing Backup Retention](images/backup-05-changing-Retention-GeoRedundancy.png)
+
+#### Modifying backup retention and GeoRedundancy
+
+1 move the slider up to **35 days**</br>
+2 check the GeoRedundancy checkbox</br>
+3 **save**.</br>
+
+
+![Changed Backup Retention](images/backup-03-ChangedRetention-Save.png)
+
+
 
 ### 1.5 Cost model
 - Backup storage **up to the provisioned storage size is included**; consumption beyond that is billed.
