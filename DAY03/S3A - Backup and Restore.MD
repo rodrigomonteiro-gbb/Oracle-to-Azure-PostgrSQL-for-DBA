@@ -51,7 +51,17 @@
 
 #### Current backup retention
 
-![Backup Retention](images/backup-01-Settings.png)
+![Current Backup Retention](images/backup-01-Settings.png)
+
+#### Changing backup retention
+
+![Changing Backup Retention](images/backup-02-CurrentRetention.png)
+
+#### Modifying and Saving backup retention
+
+![Changed Backup Retention](images/backup-03-ChangedRetention-Save.png)
+
+
 
 ### 1.4 Redundancy options
 | Option | What it does | When it is chosen |
