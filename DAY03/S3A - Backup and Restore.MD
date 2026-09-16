@@ -49,6 +49,10 @@
 - Changeable **after** creation (Settings → Compute + storage → Backup).
 - Beyond 35 days requires **vaulted backups / LTR** (Section 5).
 
+#### Current backup retention
+
+![Backup Retention](images/backup-01-Settings.png)
+
 ### 1.4 Redundancy options
 | Option | What it does | When it is chosen |
 |---|---|---|
