@@ -159,7 +159,7 @@ $srv = Get-AzPostgreSqlFlexibleServer -ResourceGroupName $RG -Name $SRC
 > note: we are using several $TGT variables, each one will be used for one restore operation. make sure to set them with different values, as Target for restore operations must be new Servers.
 </br>
 
-#### inspect current backup configuration
+#### Inspect current backup configuration
 
 ```powershell
 [pscustomobject]@{
@@ -174,7 +174,7 @@ $srv = Get-AzPostgreSqlFlexibleServer -ResourceGroupName $RG -Name $SRC
 } | Format-List
 ```
 
-Inventory the whole estate at once — useful as a governance check before the workshop:
+#### Inventory the whole estate at once — useful as a governance check before the workshop:
 
 ```powershell
 Get-AzPostgreSqlFlexibleServer |
@@ -186,9 +186,7 @@ Get-AzPostgreSqlFlexibleServer |
     Format-Table -AutoSize
 ```
 
-> **Read this like LIST BACKUP SUMMARY**. EarliestRestoreDate is your recovery window floor — the equivalent of asking "how far back does my FRA actually go?" Anything older is already deleted and unrecoverable.
-
-
+> **LIST BACKUP SUMMARY**. EarliestRestoreDate is your recovery window floor — the equivalent of asking "how far back does my FRA actually go?" Anything older is already deleted and unrecoverable.
 
 ### 3.2 Change retention (7–35 days)
 
@@ -230,9 +228,9 @@ Restore-AzPostgreSqlFlexibleServer `
     -RestorePointInTime $restorePoint
 ```
 
-> Use **UTC**. Teach the team to record incident timestamps in UTC — mixing local time and UTC is the #1 cause of a "restored to the wrong minute" do-over.
+> Use **UTC**. Record incident timestamps in UTC — mixing local time and UTC is the #1 cause of a "restored to the wrong minute" do-over.
 
-#### Measure the restore — this is the number that becomes your documented **RTO**:
+#### Measure the restore — this is the number that becomes your documented **RTO**
 
 ```powershell
 # Always build the timestamp explicitly in UTC
@@ -256,14 +254,15 @@ $job | Wait-Job | Receive-Job
 ```
 
 </br>
-> This is RECOVER DATABASE UNTIL TIME — with two differences worth saying out loud to the room: there is no RESTORE step to run first, and the result is a brand-new server, not your source recovered in place. </br>
- </br>
-⚠️ **Always use UTC**. -RestorePointInTime takes a [DateTime]; if you pass an unqualified local-time string, PowerShell will interpret it with the kind of the machine you're on. SpecifyKind(...Utc) removes all ambiguity. Record incident timestamps in UTC from the start — mixing local time and UTC is the #1 cause of a "restored to the wrong minute" do-over.</br>
+
+> This is **RECOVER DATABASE UNTIL TIME** — with two differences worth saying out loud to the room: there is no RESTORE step to run first, and the result is a brand-new server, not your source recovered in place. </br> ⚠️ **Always use UTC**. -RestorePointInTime takes a [DateTime]; if you pass an unqualified local-time string, PowerShell will interpret it with the kind of the machine you're on. SpecifyKind(...Utc) removes all ambiguity. Record incident timestamps in UTC from the start — mixing local time and UTC is the #1 cause of a "restored to the wrong minute" do-over.</br>
 
 ### 3.4 Restore to latest restore point
 
 </br>
-The Az cmdlet requires -RestorePointInTime, so "latest" is expressed as a few minutes ago — safely inside the archived-WAL window:
+
+The Az cmdlet requires -RestorePointInTime, so "latest" is expressed as a few minutes ago — safely inside the **archived-WAL** window:
+</br>
 
 ```powershell
 $latest = (Get-Date).ToUniversalTime().AddMinutes(-5)
@@ -282,7 +281,8 @@ Restore-AzPostgreSqlFlexibleServer `
 ### 3.5 Geo-restore to the paired region (GRS servers only)
 
 </br>
-**PowerShell (Az module)** — same cmdlet, -UseGeoRestore switch:
+
+**PowerShell (Az module)** — same cmdlet, **-UseGeoRestore** switch:
 </br>
 
 ```powershell
@@ -370,60 +370,255 @@ Get-ChildItem $BackupDir -Filter *.dump |
  **Remember** `pg_dump` is **not** your DR strategy — it has no PITR, no consistency across databases, and long runtimes at scale. It is your **object-level and portability** tool. Platform backup is your DR strategy.
 </br>
 
-
-
 ---
 
-## 4. Lab exercises
+## 4. OPTIONAL Lab exercises
 
 ### Lab 1 — Prove the RPO (20 min)
-1. Create a table and insert rows with `now()` timestamps in a loop for 5 minutes.
-2. Note a timestamp **T** mid-loop (UTC). Keep inserting for 5 more minutes.
-3. Simulate the disaster: `DROP TABLE` (or `DELETE` with no `WHERE`).
-4. Restore with `--restore-time T`.
-5. Connect to the new server and confirm the table contains rows **up to T and nothing after**.
-6. Record: wall-clock restore duration vs. database size. *This becomes your RTO evidence.*
 
-### Lab 2 — Table-level recovery (15 min)
-1. Using the server restored in Lab 1, `pg_dump -t` the recovered table.
-2. `pg_restore` it into the production server under a staging schema.
-3. Reconcile and merge. **Discussion:** when is this preferable to cutting over to the restored server?
+> **Objective**: demonstrate that Azure PostgreSQL Flexible Server can recover to an arbitrary second inside the retention window, and produce a measured **RTO** number for your own runbook.
+</br>
 
-### Lab 3 — Fast restore point vs. PITR (10 min)
-Run both on the same source and time them. **Discussion:** what data loss are you accepting in exchange for the speed?
+> Oracle framing: this is the RECOVER DATABASE UNTIL TIME drill you've run a hundred times — except there is no RESTORE step, no channel allocation, and the recovered database arrives as a new server.
 
-### Lab 4 — Post-restore checklist drill (10 min)
-Restore a server and identify everything NOT automatically carried over. Produce a cutover runbook (template in Section 7).
+#### Lab variables (run once)
 
----
+```powershell
+$RG      = 'rg-pg-workshop'
+$SRC     = 'pg-prod-01'
+$TGT     = "pg-lab1-restore-$((Get-Date).ToString('MMddHHmm'))"   # unique name per attempt
+$ADMIN   = 'pgadmin'
+$DB      = 'labdb'
+$SrcFqdn = "$SRC.postgres.database.azure.com"
+$TgtFqdn = "$TGT.postgres.database.azure.com"
 
-## 5. Long-term retention (vaulted backups)
+# Cache the password for psql / pg_dump for this session only
+$env:PGPASSWORD = (Read-Host -Prompt 'Postgres admin password' -AsSecureString |
+                   ConvertFrom-SecureString -AsPlainText)
 
-For retention beyond 35 days — regulatory, audit, ransomware protection.
+# Sanity check: how far back can we actually go?
+(Get-AzPostgreSqlFlexibleServer -ResourceGroupName $RG -Name $SRC).BackupEarliestRestoreDate
+```
 
-**What it gives you**
-- Retention up to **10 years**.
-- Backups copied to an **isolated storage environment outside your tenant and subscription** → protection against ransomware and against deletion of the source subscription.
-- Zero-infrastructure: Azure Backup handles scheduling and retention lifecycle.
-- Central monitoring of jobs across estates.
+> If BackupEarliestRestoreDate is less than ~10 minutes old, the server was just created — wait for the first snapshot to complete before starting, or the restore will fail with "restore point out of range."
 
-**How to set it up (portal path)**
-1. Create a **Backup vault** **in the same region** as the server.
-2. Create a **backup policy** — datasource type *Azure Database for PostgreSQL flexible servers*; set frequency (weekly/monthly/yearly) and retention rules.
-3. On the server: **Settings → LTR (Vaulted Backups) → Configure protection**, pick the vault + policy.
-4. Grant the vault's **managed identity** the required roles — the wizard offers **Assign missing roles**:
-   - *PostgreSQL Flexible Server Long Term Retention Backup Role* on the server
-   - *Reader* on the server's resource group
-   - *Storage Blob Data Contributor* on the target storage account (for restore)
+#### Step 1. Create a table and insert rows with `now()` timestamps in a loop for 5 minutes.
 
-**Restoring from the vault is a two-step process**
-1. Restore the backup from the vault **to a storage container** (restore-as-files).
-2. Load those files into a **new or existing** flexible server.
+```sql
+-- save this file as lab1-setup.sql
+-- Lab 1: RPO proof table. 
+DROP TABLE IF EXISTS rpo_test;
 
-> ⚠️ **Original Location Recovery (OLR) is not supported for PaaS databases** — use **Alternate Location Recovery (ALR)**: restore into the same or another flexible server as a new database, keeping both source and restored copies.
-> ⚠️ Target storage account needs `AllowCrossTenantReplication = true`, permitted copy scope "from any storage account", and network access permitting the Backup vault (or the trusted-Microsoft-services exception).
+CREATE TABLE rpo_test (
+    id          bigserial PRIMARY KEY,
+    inserted_at timestamptz NOT NULL DEFAULT now(),   -- server time, UTC-aware
+    batch_note  text        NOT NULL,
+    payload     text        NOT NULL
+);
 
-**Cost:** protected-instance fee (per 250 GB units of database size) + backup storage fee (GB stored × vault redundancy).
+CREATE INDEX ix_rpo_test_inserted_at ON rpo_test (inserted_at);
+
+-- Confirm the server's clock and timezone -- this is the clock PITR uses
+SELECT now() AS server_now,
+       now() AT TIME ZONE 'UTC' AS server_now_utc,
+       current_setting('TimeZone') AS server_timezone;
+```
+
+##### Run it with PowerShell</br>
+
+```powershell
+psql -h $SrcFqdn -U $ADMIN -d $DB -f .\lab1-setup.sql
+```
+
+##### PowerShell - the insert loop (phase 1, 5 minutes)
+
+```powershell
+$phase1End = (Get-Date).AddMinutes(5)
+$i = 0
+
+while ((Get-Date) -lt $phase1End) {
+    $i++
+    psql -h $SrcFqdn -U $ADMIN -d $DB -q -c @"
+INSERT INTO rpo_test (batch_note, payload)
+SELECT 'PHASE1', repeat(md5(random()::text), 4)
+FROM generate_series(1, 200);
+"@
+    if ($LASTEXITCODE -ne 0) { Write-Warning "Insert batch $i failed (exit $LASTEXITCODE)" }
+    Start-Sleep -Seconds 5
+}
+
+Write-Host "Phase 1 complete: $i batches inserted." -ForegroundColor Green
+```
+
+> Each batch writes ~200 rows of random text. The volume matters less than the continuity — you need a steady WAL stream so there is something for PITR to replay.
+
+#### Step 2. Simulate the disaster: `DROP TABLE` (or `DELETE` with no `WHERE`).
+
+</br>
+Capture **T** from the database server, not your laptop. Clock skew between a workstation and the service is exactly the kind of error this lab exists to surface
+
+```powershell
+# T = the recovery target. Read it from the server, in UTC.
+$T = psql -h $SrcFqdn -U $ADMIN -d $DB -t -A -c "SELECT to_char(now() AT TIME ZONE 'UTC','YYYY-MM-DD HH24:MI:SS');"
+$T = $T.Trim()
+
+$restorePoint = [datetime]::SpecifyKind([datetime]::ParseExact($T,'yyyy-MM-dd HH:mm:ss',$null),
+                                        [System.DateTimeKind]::Utc)
+
+Write-Host "RECOVERY TARGET T (UTC): $($restorePoint.ToString('o'))" -ForegroundColor Cyan
+
+# Record the row count as of T -- this is what the restore must reproduce
+$countAtT = psql -h $SrcFqdn -U $ADMIN -d $DB -t -A -c "SELECT count(*) FROM rpo_test;"
+Write-Host "Rows at T: $countAtT"
+
+# Persist the evidence so it survives a closed shell
+[pscustomobject]@{ T = $restorePoint.ToString('o'); RowsAtT = $countAtT } |
+    Export-Csv .\lab1-evidence.csv -NoTypeInformation
+```
+
+##### Phase 2 — 5 more minutes of inserts (the data that must NOT survive):
+
+```powershell
+$phase2End = (Get-Date).AddMinutes(5)
+$j = 0
+
+while ((Get-Date) -lt $phase2End) {
+    $j++
+    psql -h $SrcFqdn -U $ADMIN -d $DB -q -c @"
+INSERT INTO rpo_test (batch_note, payload)
+SELECT 'PHASE2-AFTER-T', repeat(md5(random()::text), 4)
+FROM generate_series(1, 200);
+"@
+    Start-Sleep -Seconds 5
+}
+
+$countAfter = psql -h $SrcFqdn -U $ADMIN -d $DB -t -A -c "SELECT count(*) FROM rpo_test;"
+Write-Host "Rows now (after T): $countAfter  |  Rows at T was: $countAtT" -ForegroundColor Yellow
+```
+
+> The **PHASE2-AFTER-T** marker is the whole point — it gives you a visible, queryable label for data that must be absent from the restored copy. Never rely on row counts alone to judge a recovery.
+
+#### Step 3. Simulate the disaster
+
+</br>
+Pick one. DROP TABLE is the more instructive choice for Oracle DBAs because it has no Flashback Drop equivalent — there is no recycle bin to pull it back from.
+
+```powershell
+# Option A -- DDL disaster (no recycle bin, no FLASHBACK DROP)
+psql -h $SrcFqdn -U $ADMIN -d $DB -c "DROP TABLE rpo_test;"
+
+# Option B -- DML disaster: the classic DELETE with no WHERE
+# psql -h $SrcFqdn -U $ADMIN -d $DB -c "DELETE FROM rpo_test;"
+
+# Confirm the damage
+psql -h $SrcFqdn -U $ADMIN -d $DB -c "\dt rpo_test"
+```
+
+> Discussion prompt (2 min): in Oracle, which of these would Flashback have saved you from, and at what cost? Here, both have exactly one answer — PITR. Note also that HA and read replicas would have replicated this DROP faithfully within milliseconds.
+
+#### Step 4. Restore with `--restore-time T`
+
+```powershell
+$sw = [System.Diagnostics.Stopwatch]::StartNew()
+
+Restore-AzPostgreSqlFlexibleServer `
+    -ResourceGroupName $RG `
+    -Name $TGT `
+    -SourceServerName $SRC `
+    -RestorePointInTime $restorePoint
+
+$sw.Stop()
+Write-Host ("Restore completed in {0:N1} minutes" -f $sw.Elapsed.TotalMinutes) -ForegroundColor Green
+```
+
+> While it runs: **the source server is untouched and still online. Nothing was overwritten. That is the single largest behavioral difference from an RMAN in-place recovery.**
+
+#### Step 5. Connect to the new server and confirm the table contains rows **up to T and nothing after**.
+
+```powershell
+# The restored server has a NEW FQDN -- the connection string changed
+$TgtFqdn = "$TGT.postgres.database.azure.com"
+
+# Firewall rule may be needed before you can connect
+$myIp = (Invoke-RestMethod '`\[unsafe link removed: hxxps://api.ipify.org?format=json'\).ip\]`
+New-AzPostgreSqlFlexibleServerFirewallRule -ResourceGroupName $RG -ServerName $TGT `
+    -Name 'lab-client' -StartIPAddress $myIp -EndIPAddress $myIp
+```
+
+</br>
+
+##### Save this script as: lab1-validate.sql</br>
+
+```sql
+-- 1. The table exists again -- the DROP was undone
+SELECT count(*) AS total_rows FROM rpo_test;
+
+-- 2. THE PROOF: phase 2 rows must be zero
+SELECT batch_note, count(*) AS rows
+FROM rpo_test
+GROUP BY batch_note
+ORDER BY batch_note;
+
+-- 3. The newest surviving row must sit at or just before T
+SELECT max(inserted_at) AT TIME ZONE 'UTC' AS newest_row_utc,
+       min(inserted_at) AT TIME ZONE 'UTC' AS oldest_row_utc
+FROM rpo_test;
+
+-- 4. Explicit pass/fail assertion
+SELECT CASE
+         WHEN count(*) = 0 THEN 'PASS - no post-T data present'
+         ELSE 'FAIL - ' || count(*) || ' rows from after T leaked into the restore'
+       END AS pitr_verdict
+FROM rpo_test
+WHERE batch_note = 'PHASE2-AFTER-T';
+```
+
+##### execute the script
+
+```powershell
+psql -h $TgtFqdn -U $ADMIN -d $DB -f .\lab1-validate.sql
+```
+> Expected result: PHASE1 rows present, PHASE2-AFTER-T count zero, newest_row_utc at or fractionally before T, verdict PASS. 
+> 
+> If a handful of post-T rows appear, you restored to a slightly later point than intended — almost always a timezone or clock-skew error in how T was captured. That is a finding, not a failure: it is precisely why Step 2 reads the clock from the server.
+
+#### Step 6. Record: wall-clock restore duration vs. database size. *This becomes your RTO evidence.*
+
+```powershell
+$srcInfo = Get-AzPostgreSqlFlexibleServer -ResourceGroupName $RG -Name $SRC
+
+$result = [pscustomobject]@{
+    RunDateUtc        = (Get-Date).ToUniversalTime().ToString('o')
+    SourceServer      = $SRC
+    RestoredServer    = $TGT
+    DatabaseSizeGb    = $srcInfo.StorageSizeGb
+    RetentionDays     = $srcInfo.BackupRetentionDay
+    GeoRedundant      = $srcInfo.BackupGeoRedundantBackup
+    RecoveryTargetUtc = $restorePoint.ToString('o')
+    RowsAtT           = $countAtT
+    RowsBeforeFailure = $countAfter
+    RestoreMinutes    = [math]::Round($sw.Elapsed.TotalMinutes,1)
+    Operator          = $env:USERNAME
+}
+
+$result | Format-List
+$result | Export-Csv .\lab1-rto-evidence.csv -NoTypeInformation -Append
+Write-Host "Evidence appended to lab1-rto-evidence.csv" -ForegroundColor Green
+```
+
+
+> Closing discussion (5 min):
+> Restore time is driven by data size plus WAL volume to replay — it is not a fixed SLA. This measured number, not a vendor figure, is what belongs in your runbook.
+> Restoring to a point further from the last snapshot means more WAL to replay and a longer RTO. This is the trade-off Fast restore point buys out.
+> Your RTO is not complete until you add cutover time — connection strings, firewall, parameters, roles, extensions, HA re-enable (Section 7 checklist).
+
+#### Step 7 - Clean up
+
+
+```powershell
+Remove-AzPostgreSqlFlexibleServer -ResourceGroupName $RG -Name $TGT -Force
+Remove-Item Env:\PGPASSWORD
+```
 
 ---
 
