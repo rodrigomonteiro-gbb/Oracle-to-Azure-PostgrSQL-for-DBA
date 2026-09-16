@@ -2,11 +2,6 @@
 
 ## Primary Key, Unique, Foreign Key, Check, Exclusion and the rest
 
-**Audience:** DBAs coming from Oracle and SQL Server
-**Companion to:** *PostgreSQL Index Types — Complete Guide with Hands-On Demos*
-**Platform:** Azure Database for PostgreSQL Flexible Server (PG 14+; PG 16 assumed)
-**All demos are runnable SQL.**
-
 ---
 
 ## 0. The short answer to the question

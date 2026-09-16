@@ -1,14 +1,12 @@
 # Backup, Restore & Point-in-Time Restore
+
 ## Azure Database for PostgreSQL – Flexible Server
+
 ### Workshop for Oracle DBAs moving to Azure PostgreSQL
-
-**Audience:** Experienced Oracle DBAs (RMAN, Data Guard, Flashback, ARCHIVELOG)</br>
-**Goal:** Be able to explain, configure, test and defend a backup/recovery strategy on Azure Database for PostgreSQL – Flexible Server on day one.</br>
-
 
 ---
 
-## 0. Mental model
+## 0. The 60-second summary
 
 > In Oracle you **own** the backup. In Azure PostgreSQL Flexible Server the platform **owns** the backup — you own the **retention policy, the redundancy choice, and the recovery drill.**
 

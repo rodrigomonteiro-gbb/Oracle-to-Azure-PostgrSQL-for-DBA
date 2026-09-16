@@ -4,9 +4,9 @@
 
 ---
 
-## 0. The headline answers
+## 0. The 60-second summary
 
-Four questions new PostgreSQL DBAs always ask, answered before the detail.
+Four questions people always ask, answered before the detail.
 
 | Question | Answer |
 |---|---|
@@ -15,7 +15,7 @@ Four questions new PostgreSQL DBAs always ask, answered before the detail.
 | **Does anything rebuild an index?** | ✅ **`REINDEX`**, **`VACUUM FULL`**, **`CLUSTER`**, and `pg_repack`. Those are the only four. |
 | **Is there a "reorganize" like SQL Server's `ALTER INDEX ... REORGANIZE`?** | ❌ **No such operation exists in PostgreSQL.** There is only rebuild. |
 
-**Mental model:**
+**The one-paragraph mental model:**
 
 > A PostgreSQL B-tree page splits when it fills, but **two half-empty sibling pages are never merged back together**. A page that becomes *completely* empty is marked deleted and recycled **for that index only** — never returned to the operating system. So an index's file size is a **high-water mark**: it tracks the worst bloat the index has ever seen, and the only way to reset it is a full rebuild. `VACUUM` keeps the index *correct* and stops it growing further; it does not make it *smaller*.
 
@@ -274,45 +274,60 @@ SELECT * FROM pgstattuple_approx('maint_demo');
 Use this when the extension is unavailable, or for a cheap fleet-wide sweep. It reads only statistics — **no table access, instant** — but it is an **estimate**.
 
 ```sql
-SELECT current_database() AS db,
-       nspname            AS schema_name,
-       tblname            AS table_name,
-       idxname            AS index_name,
-       pg_size_pretty(real_size::bigint)  AS index_size,
-       pg_size_pretty(GREATEST(bloat_size, 0)::bigint) AS estimated_bloat,
-       round(GREATEST(bloat_pct, 0)::numeric, 1)       AS bloat_pct
+SELECT current_database()                                  AS db,
+       nspname                                             AS schema_name,
+       tblname                                             AS table_name,
+       idxname                                             AS index_name,
+       pg_size_pretty(real_size::bigint)                   AS index_size,
+       pg_size_pretty(GREATEST(real_size - est_size, 0)::bigint) AS estimated_bloat,
+       round(GREATEST(100 * (real_size - est_size)
+                      / NULLIF(real_size, 0), 0)::numeric, 1)    AS bloat_pct
 FROM (
-  SELECT nspname, tblname, idxname, real_size,
-         real_size - est_size          AS bloat_size,
-         100 * (real_size - est_size) / NULLIF(real_size, 0) AS bloat_pct
-  FROM (
-    SELECT n.nspname, ct.relname AS tblname, ci.relname AS idxname,
-           pg_relation_size(ci.oid)::float8 AS real_size,
-           (  (reltuples * (6 + 8
-              + sum(CASE WHEN s.null_frac > 0 THEN 1 ELSE 0 END)
-              + sum((1 - s.null_frac) * COALESCE(s.avg_width, 8))))
-              / (8192 * 0.9)
-           )::float8 * 8192 AS est_size
+    SELECT n.nspname,
+           ct.relname                        AS tblname,
+           ci.relname                        AS idxname,
+           pg_relation_size(ci.oid)::float8  AS real_size,
+           (
+             (GREATEST(ct.reltuples, 0) * (6 + 8
+                + sum(CASE WHEN s.null_frac > 0 THEN 1 ELSE 0 END)
+                + sum((1 - COALESCE(s.null_frac, 0)) * COALESCE(s.avg_width, 8))))
+             / (8192 * 0.9)
+           )::float8 * 8192                  AS est_size
     FROM pg_index i
-    JOIN pg_class ci      ON ci.oid = i.indexrelid
-    JOIN pg_class ct      ON ct.oid = i.indrelid
-    JOIN pg_namespace n   ON n.oid = ct.relnamespace
+    JOIN pg_class     ci ON ci.oid = i.indexrelid
+    JOIN pg_class     ct ON ct.oid = i.indrelid
+    JOIN pg_am        am ON am.oid = ci.relam
+    JOIN pg_namespace n  ON n.oid  = ct.relnamespace
     JOIN LATERAL unnest(i.indkey) WITH ORDINALITY AS k(attnum, ord) ON true
-    LEFT JOIN pg_stats s  ON s.schemaname = n.nspname
-                         AND s.tablename  = ct.relname
-                         AND s.attname    = (SELECT attname FROM pg_attribute
-                                             WHERE attrelid = ct.oid AND attnum = k.attnum)
-    WHERE n.nspname NOT IN ('pg_catalog','information_schema')
-      AND ci.relpages > 100                      -- ignore tiny indexes
+    LEFT JOIN pg_attribute a ON a.attrelid = ct.oid
+                            AND a.attnum   = k.attnum
+    LEFT JOIN pg_stats s     ON s.schemaname = n.nspname
+                            AND s.tablename  = ct.relname
+                            AND s.attname    = a.attname
+    WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+      AND am.amname   = 'btree'     -- the formula models a B-TREE only
+      AND ci.relpages > 100         -- ignore tiny indexes
+      AND ct.reltuples > 0          -- skip empty / never-analyzed tables
+      AND i.indisvalid              -- skip failed CONCURRENTLY builds
     GROUP BY n.nspname, ct.relname, ci.relname, ci.oid, ct.reltuples
-  ) raw
-) est
-WHERE bloat_pct > 20
-ORDER BY bloat_size DESC
+) raw
+WHERE real_size > est_size
+  AND 100 * (real_size - est_size) / NULLIF(real_size, 0) > 20
+ORDER BY (real_size - est_size) DESC
 LIMIT 40;
 ```
 
-> **Treat the estimate as a triage tool, not a verdict.** It can be off by tens of percent, especially with variable-length columns. Use it to pick candidates, then confirm the shortlist with `pgstatindex`.
+> ⚠️ **Five things this query must get right — and the errors you get if it does not.**
+>
+> | Detail | Why it matters |
+> |---|---|
+> | **`ct.reltuples`, never bare `reltuples`** | `ci` (the index) and `ct` (the table) are **both `pg_class`**, and both have a `reltuples` column. An unqualified reference fails with `column reference "reltuples" is ambiguous`. You want the **table's** row count. |
+> | **Join `pg_attribute`, do not use a correlated subquery** | A subquery in the `ON` clause runs once per row and returns `NULL` for expression-index columns (`attnum = 0`), silently skewing every estimate. |
+> | **`GREATEST(ct.reltuples, 0)`** | **PG 14+ stores `-1` for "never analyzed."** Multiplying by `-1` produces a *negative* estimate and nonsense percentages. |
+> | **`am.amname = 'btree'`** | The formula models a B-tree's entry layout. Applied to GIN, GiST, SP-GiST or BRIN it returns garbage — **a BRIN index would appear 99% bloated** when it is perfectly healthy. |
+> | **`COALESCE(s.null_frac, 0)`** | Columns with no statistics yet would otherwise `NULL` out the whole arithmetic. |
+
+> **Treat the output as a triage tool, not a verdict.** It can be off by tens of percent, especially with variable-length columns. Use it to pick candidates, then **confirm the shortlist with `pgstatindex` (§4.1)** before rebuilding anything.
 
 ### 4.3 Demo — create bloat and watch it happen
 
@@ -347,22 +362,34 @@ FROM pgstatindex('ix_maint_account');
 
 ### 4.4 Does bloat actually hurt? — measure it
 
-> **👁 What to look for in these plans**
->
-> Run the same query before and after a `REINDEX` and compare **`Buffers`**, not time.
->
-> | In the plan | What bloat does to it |
-> |---|---|
-> | **`Buffers: shared hit/read`** | **The honest metric.** A bloated index spreads the same entries over more pages, so the tree is deeper and each scan touches more buffers. |
-> | **`Index Scan` / `Bitmap Index Scan`** node | The access method does not change — bloat makes the *same plan* slower. There is no plan-shape clue that you have a bloat problem. |
-> | **`actual time=`** | Moves too, but is noisy; if the whole index is cached, a 2× bloated index may show almost no time difference while doing twice the work. |
->
-> **This is why bloat is insidious:** it never shows up as a bad plan. It shows up as gradually rising buffer counts and memory pressure that nobody attributes to the index.
+> 🔴 **Run this BEFORE any rebuild.** Once you `REINDEX`, the "before" measurement is gone and cannot be reconstructed. Capture it now and **write the number down**.
+
+**Step A — baseline, while the index is still bloated:**
 
 ```sql
 EXPLAIN (ANALYZE, BUFFERS, COSTS OFF)
 SELECT count(*) FROM maint_demo WHERE account_id BETWEEN 1000 AND 1100;
 ```
+
+> **👁 What to record**
+>
+> | In the plan | What bloat does to it |
+> |---|---|
+> | **`Buffers: shared hit=N read=M`** | **The honest metric — add them and note the total.** A bloated index spreads the same entries over more pages, so the tree is deeper and each scan touches more buffers. |
+> | **`Index Scan` / `Bitmap Index Scan`** node | Note the node type. It will be **identical** after the rebuild — bloat makes the *same plan* slower. **There is no plan-shape clue that you have a bloat problem.** |
+> | **`actual time=`** | Record it, but trust it less. If the whole index is cached, a 2× bloated index may show almost no time difference while doing twice the work. |
+>
+> **This is why bloat is insidious:** it never shows up as a bad plan. It shows up as gradually rising buffer counts and memory pressure that nobody attributes to the index.
+
+**Step B — rebuild** (§5.2), **then Step C — re-run the identical query:**
+
+```sql
+-- After REINDEX: same query, same rows, same plan shape -- fewer buffers.
+EXPLAIN (ANALYZE, BUFFERS, COSTS OFF)
+SELECT count(*) FROM maint_demo WHERE account_id BETWEEN 1000 AND 1100;
+```
+
+> **The buffer delta between Step A and Step C is the value of the rebuild** — expressed in the only unit that is hardware-independent and reproducible on any machine. **Put that number on the slide, not the millisecond difference.**
 
 ---
 
@@ -424,6 +451,162 @@ FROM pgstatindex('ix_maint_account');
 
 Then re-run the §4.4 query and compare `Buffers`. **That delta is the value of the rebuild, in the only unit that is hardware-independent.**
 
+> ⚠️ **If "before" and "after" are IDENTICAL, that is a valid result — not a broken demo.** Go to **§5.3.1**, which explains why and gives a demo that bloats reliably.
+
+### 5.3.1 Fallback demo — guaranteed bloat via bulk `DELETE`
+
+#### Why §5.3 can legitimately show no change
+
+| Cause | Explanation |
+|---|---|
+| 🎯 **Bottom-up index deletion (PG 14+)** | **The main reason.** The §4.3 demo churns an indexed column with `UPDATE` — *exactly* the workload this feature was built to defeat. When a leaf page is about to split, PostgreSQL now scans it for entries whose row versions are dead and deletes them **instead of splitting**. On PG 14+ that pattern barely bloats at all. |
+| **Space reuse** | `VACUUM` freed slots that subsequent `UPDATE`s immediately refilled — net zero growth. |
+| **`pg_size_pretty` rounding** | 43 MB → 42 MB prints as a visible change; 43.4 MB → 43.1 MB does not. **Always measure in raw bytes for this demo.** |
+
+> **This is genuinely good news, and worth saying to the room:** if a customer's objection to PostgreSQL is "indexes bloat constantly," their experience is probably from **PG 11 or 12**. Bottom-up index deletion materially changed the picture, and it needs no configuration.
+
+#### First — confirm there was actually nothing to reclaim
+
+```sql
+SET search_path TO maintlab, public;
+
+SELECT pg_relation_size('ix_maint_account')              AS raw_bytes,
+       round(avg_leaf_density::numeric, 1)               AS leaf_density_pct,
+       round(leaf_fragmentation::numeric, 1)             AS fragmentation_pct,
+       leaf_pages, deleted_pages
+FROM pgstatindex('ix_maint_account');
+```
+
+> **If `avg_leaf_density` is around 90%, the index was never bloated and `REINDEX` correctly did nothing.** A rebuild packs to `fillfactor` (90 for B-tree), so a healthy index rebuilds to the same size.
+>
+> **The lesson to state explicitly:** `REINDEX` is **measurement-driven, not calendar-driven.** Running it on a dense index is pure I/O for zero gain.
+
+#### A demo that bloats every time
+
+This uses **`DELETE` + `VACUUM`**, which bottom-up deletion does not mitigate.
+
+**Step 1 — build a clean table and index**
+
+```sql
+SET search_path TO maintlab, public;
+
+DROP TABLE IF EXISTS bloat_proof;
+
+CREATE TABLE bloat_proof (
+    id  bigint NOT NULL,
+    val text
+);
+
+INSERT INTO bloat_proof
+SELECT g, repeat('x', 50) FROM generate_series(1, 3000000) g;
+
+CREATE INDEX ix_bloat_proof ON bloat_proof (id);
+ANALYZE bloat_proof;
+```
+
+**Step 2 — baseline (raw bytes, not pretty-printed)**
+
+```sql
+SELECT pg_relation_size('ix_bloat_proof')                AS raw_bytes,
+       pg_size_pretty(pg_relation_size('ix_bloat_proof')) AS pretty,
+       round(avg_leaf_density::numeric, 1)               AS leaf_density_pct,
+       leaf_pages, deleted_pages
+FROM pgstatindex('ix_bloat_proof');
+```
+
+Expect **~90% density** — a freshly built index.
+
+**Step 3 — delete 90% of rows, leaving a survivor on every page**
+
+```sql
+-- Keeps only ids divisible by 10. Every leaf page keeps roughly 1 entry in 10,
+-- so NO page becomes completely empty -- they all become ~10% full.
+-- That is the difference between reclaimable pages and genuine BLOAT.
+DELETE FROM bloat_proof WHERE id % 10 <> 0;
+
+VACUUM bloat_proof;          -- removes the 2.7M dead index entries
+```
+
+**Step 4 — the finding**
+
+```sql
+SELECT pg_relation_size('ix_bloat_proof')                AS raw_bytes,
+       pg_size_pretty(pg_relation_size('ix_bloat_proof')) AS pretty,
+       round(avg_leaf_density::numeric, 1)               AS leaf_density_pct,
+       leaf_pages, deleted_pages
+FROM pgstatindex('ix_bloat_proof');
+```
+
+> **👁 What to observe — this is the whole lesson of the document**
+>
+> | Metric | Expected | Why |
+> |---|---|---|
+> | **`raw_bytes`** | ⚠️ **Essentially unchanged** | `VACUUM` removed 2.7 million dead entries and **did not shrink the file by one byte** |
+> | **`leaf_density_pct`** | **Collapses to ~10%** | Every page kept about 1 entry in 10. **This is bloat, quantified** |
+> | **`leaf_pages`** | Unchanged | No pages were freed — none became fully empty |
+> | **`deleted_pages`** | Near zero | Confirms nothing was reclaimed |
+>
+> **Say it plainly:** the index now stores 300,000 entries in a file sized for 3,000,000. `VACUUM` made that space **reusable**; it did not make it **available**.
+
+**Step 5 — 🔴 measure query cost WHILE the index is still bloated**
+
+```sql
+-- CRITICAL: run this BEFORE the REINDEX. Record the Buffers total.
+-- After Step 6 this measurement is unrecoverable.
+EXPLAIN (ANALYZE, BUFFERS, COSTS OFF)
+SELECT count(*) FROM bloat_proof WHERE id BETWEEN 100000 AND 200000;
+```
+
+> **👁 What to record — write it down**
+>
+> | In the plan | Note it |
+> |---|---|
+> | **`Buffers: shared hit=N read=M`** | **The number that matters.** Add them: this is how many 8 KB pages the bloated index forced PostgreSQL to touch |
+> | Node type (`Index Only Scan` / `Bitmap Index Scan`) | Should be **identical** after the rebuild — bloat never changes plan shape, only its cost |
+> | `actual time=` | Record it, but trust it less — if the index is fully cached, time may barely move while buffers halve |
+
+**Step 6 — rebuild**
+
+```sql
+REINDEX INDEX CONCURRENTLY ix_bloat_proof;
+```
+
+**Step 7 — sizes after**
+
+```sql
+SELECT pg_relation_size('ix_bloat_proof')                AS raw_bytes,
+       pg_size_pretty(pg_relation_size('ix_bloat_proof')) AS pretty,
+       round(avg_leaf_density::numeric, 1)               AS leaf_density_pct,
+       round(leaf_fragmentation::numeric, 1)             AS fragmentation_pct,
+       leaf_pages
+FROM pgstatindex('ix_bloat_proof');
+```
+
+**Expected: roughly a 10× size reduction**, density back to ~90%, `leaf_pages` down by the same factor.
+
+**Step 8 — the same query again, and the comparison**
+
+```sql
+EXPLAIN (ANALYZE, BUFFERS, COSTS OFF)
+SELECT count(*) FROM bloat_proof WHERE id BETWEEN 100000 AND 200000;
+```
+
+> **👁 Compare against Step 5**
+>
+> Same query, same rows, **same plan shape — fewer buffers.** That delta is the value of the rebuild, in the only unit that is hardware-independent and reproducible on any machine.
+
+**Step 9 — teardown**
+
+```sql
+DROP TABLE bloat_proof;
+```
+
+#### What this demo teaches that §5.3 does not
+
+1. **The workloads that still bloat reliably on modern PostgreSQL** are **bulk deletes**, **archive-then-purge** patterns, and **churn on non-key columns that defeats HOT** — not steady OLTP updates.
+2. **`VACUUM` and `REINDEX` solve different problems.** `VACUUM` removes dead entries; only `REINDEX` reclaims the file space they occupied.
+3. **Measure before you rebuild.** An index at 90% density does not need one.
+
 ### 5.4 Generate a rebuild script for the worst offenders
 
 ```sql
@@ -441,6 +624,51 @@ LIMIT 20;
 > **Rebuild selectively.** A `REINDEX DATABASE` on a large system is hours of I/O for indexes that mostly did not need it. **Measure with `pgstatindex`, rebuild the ones above threshold, leave the rest alone.**
 
 ### 5.5 `FILLFACTOR` — reduce future bloat at the cost of size
+
+#### What it is
+
+**`FILLFACTOR` is the percentage of each 8 KB page that PostgreSQL fills when it *builds* an index or table, deliberately leaving the rest empty.**
+
+```
+ fillfactor = 100                    fillfactor = 70
+ +----------------------+            +----------------------+
+ |■■■■■■■■■■■■■■■■■■■■■■|            |■■■■■■■■■■■■■■■■      |
+ |■■■■■■■■■■■■■■■■■■■■■■|            |■■■■■■■■■■■■■■■■      |
+ |■■■■■■■■■■■■■■■■■■■■■■|            |■■■■■■■■■■■■■■■■      |
+ +----------------------+            +----------------------+
+  packed tight, no room               30% reserved for
+  for anything new                    future entries
+```
+
+**Defaults:** B-tree indexes **90**, heap tables **100**.
+
+#### Why indexes reserve space and tables do not
+
+The reserved space absorbs **future inserts into that exact page** — and the two object types need it for different reasons.
+
+**For an index — avoiding page splits.** A B-tree stores entries in **key order**. When a new key lands between two existing ones on a page that is already full, PostgreSQL must **split** that page: allocate a new one, move roughly half the entries across, and update the parent. That split is expensive, generates WAL, and **leaves two half-empty pages behind that are never merged back** (§3). Free space reserved by `FILLFACTOR` lets the new entry slot in without a split.
+
+**For a table — enabling HOT updates.** When a row is updated and no indexed column changed, PostgreSQL can write the new row version **on the same page** and skip index maintenance entirely (a Heap-Only Tuple update). That only works if the page has room. This is why a heavily-updated *table* sometimes benefits from `fillfactor` below 100, even though the default is 100.
+
+#### Why 90 is the index default
+
+An index on a **monotonically increasing** key — a timestamp, a sequence, an identity column — always appends to the **right-hand edge** of the tree. New entries never land in the middle, so reserved space in older pages is **wasted forever**. PostgreSQL compromises at 90: a little insurance for random-order inserts, without giving away too much on the common append-only case.
+
+#### The critical operational detail
+
+> ⚠️ **`FILLFACTOR` only takes effect when pages are written during a build.** Changing it with `ALTER INDEX ... SET (fillfactor = N)` updates the catalog and **changes nothing** on existing pages. You must follow it with a `REINDEX` — which is why every example below pairs the two statements.
+
+#### Cross-platform — mind the inversion
+
+| | **PostgreSQL** | **Oracle** | **SQL Server** |
+|---|---|---|---|
+| Parameter | `fillfactor` | `PCTFREE` | `FILLFACTOR` |
+| Meaning | **% to FILL** | **% to leave FREE** | **% to FILL** |
+| Index default | 90 | 10 (= 90% fill) | 0 (treated as 100) |
+
+> ⚠️ **Oracle's `PCTFREE` is the inverse of `FILLFACTOR`.** `PCTFREE 10` and `fillfactor = 90` describe the same layout. **Migrated DDL that carries the number across literally will be badly wrong** — `fillfactor = 10` packs pages to one tenth of capacity.
+
+#### Setting it
 
 ```sql
 -- Default for B-tree indexes is 90 (leave 10% free on each leaf page)
@@ -623,17 +851,86 @@ FROM pg_stat_user_indexes WHERE schemaname = 'maintlab';
 
 ### 6.5 Monitoring a running vacuum
 
+> ⚠️ **PostgreSQL 17 renamed columns in this view.** When vacuum's dead-tuple storage was rewritten (the new `TidStore`), the tuple-count columns became **byte** counters. Using the old names on PG 17 fails with:
+> ```
+> ERROR:  column p.max_dead_tuples does not exist
+> ```
+> **Run this first to pick the right variant:**
+> ```sql
+> SELECT current_setting('server_version_num')::int AS version_num,
+>        CASE WHEN current_setting('server_version_num')::int >= 170000
+>             THEN 'Use variant B (PG 17+)'
+>             ELSE 'Use variant C (PG 16 and earlier)'
+>        END AS which_query;
+> ```
+
+#### Variant A — portable (works on every version) ✅ *recommended default*
+
+Uses only columns present in all supported versions. **This is the one to save as a function.**
+
 ```sql
 SELECT p.pid,
-       a.query,
+       p.relid::regclass AS current_object,
+       p.phase,
+       p.heap_blks_total, p.heap_blks_scanned, p.heap_blks_vacuumed,
+       p.index_vacuum_count,
+       round(100.0 * p.heap_blks_scanned / NULLIF(p.heap_blks_total, 0), 1) AS pct_scanned,
+       now() - a.query_start AS running_for,
+       left(a.query, 60)     AS query
+FROM pg_stat_progress_vacuum p
+JOIN pg_stat_activity a USING (pid);
+```
+
+#### Variant B — PostgreSQL 17+
+
+```sql
+SELECT p.pid,
+       p.relid::regclass AS current_object,
+       p.phase,
+       p.heap_blks_total, p.heap_blks_scanned, p.heap_blks_vacuumed,
+       p.index_vacuum_count,
+       p.indexes_total, p.indexes_processed,          -- NEW in PG 17
+       pg_size_pretty(p.dead_tuple_bytes)     AS dead_tuple_mem_used,
+       pg_size_pretty(p.max_dead_tuple_bytes) AS dead_tuple_mem_limit,
+       round(100.0 * p.dead_tuple_bytes
+             / NULLIF(p.max_dead_tuple_bytes, 0), 1)  AS mem_pct_used,
+       p.num_dead_item_ids,
+       round(100.0 * p.heap_blks_scanned
+             / NULLIF(p.heap_blks_total, 0), 1)       AS pct_scanned,
+       now() - a.query_start AS running_for
+FROM pg_stat_progress_vacuum p
+JOIN pg_stat_activity a USING (pid);
+```
+
+#### Variant C — PostgreSQL 16 and earlier
+
+*Documented from the PG ≤ 16 view definition; not verified in this lab.*
+
+```sql
+SELECT p.pid,
+       p.relid::regclass AS current_object,
        p.phase,
        p.heap_blks_total, p.heap_blks_scanned, p.heap_blks_vacuumed,
        p.index_vacuum_count,
        p.max_dead_tuples, p.num_dead_tuples,
-       round(100.0 * p.heap_blks_scanned / NULLIF(p.heap_blks_total, 0), 1) AS pct_scanned
+       round(100.0 * p.num_dead_tuples
+             / NULLIF(p.max_dead_tuples, 0), 1)  AS mem_pct_used,
+       round(100.0 * p.heap_blks_scanned
+             / NULLIF(p.heap_blks_total, 0), 1)  AS pct_scanned
 FROM pg_stat_progress_vacuum p
 JOIN pg_stat_activity a USING (pid);
 ```
+
+#### What changed in PG 17, and why it is an improvement
+
+| PG 16 and earlier | PG 17+ | Why |
+|---|---|---|
+| `max_dead_tuples` | **`max_dead_tuple_bytes`** | Memory is tracked in bytes, not a tuple count |
+| `num_dead_tuples` | **`dead_tuple_bytes`** | Same |
+| — | **`num_dead_item_ids`** | The actual dead-item count, kept separately |
+| — | **`indexes_total` / `indexes_processed`** | 🎯 **Progress *through the index phase*** — which never existed before |
+
+> **`indexes_processed` / `indexes_total` is genuinely useful.** Before PG 17 you could see that vacuum was in the `vacuuming indexes` phase but had **no idea how far through it was** — on a table with 12 indexes it looked frozen. Now you can watch it advance.
 
 > **The column to watch is `index_vacuum_count`.** If it climbs above 1, vacuum ran out of `maintenance_work_mem` and is re-scanning every index on each pass. **That is the single most common cause of "vacuum takes forever."** The fix is more memory, not more patience.
 

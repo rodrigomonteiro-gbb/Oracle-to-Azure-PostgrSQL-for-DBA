@@ -1,9 +1,6 @@
 # PostgreSQL Index Types — Complete Guide with Hands-On Demos
-## For DBAs coming from SQL Server and Oracle
 
-**Target platform:** Azure Database for PostgreSQL Flexible Server (PostgreSQL 14+; PG 16 assumed)</br>
-**Format:** every section = concept → benefit → use case → runnable SQL demo → how to measure the gain</br>
-**All demos are pure SQL.** They are self-contained: each creates its own table, populates it, measures before/after, and cleans up.</br>
+## For DBAs coming from SQL Server and Oracle
 
 ---
 
