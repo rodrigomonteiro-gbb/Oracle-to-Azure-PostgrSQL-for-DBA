@@ -4,22 +4,22 @@
 
 ### Tooling-led approach using the PostgreSQL extension for Visual Studio Code
 
-**Audience:** Oracle DBAs, data architects, application owners, and the migration lead
-**Scope:** Everything that happens **before** the first row of production data moves
-**Primary tool:** PostgreSQL extension for Visual Studio Code (Microsoft, `ms-ossdata.vscode-pgsql`) — the Product Group's AI-assisted Oracle migration tooling
-**Companion to:** *Backup, Restore & Point-in-Time Restore — Workshop for Oracle DBAs*
+**Audience:** Oracle DBAs, data architects, application owners, and the migration lead</br>
+**Scope:** Everything that happens **before** the first row of production data moves</br>
+**Primary tool:** PostgreSQL extension for Visual Studio Code (Microsoft, `ms-ossdata.vscode-pgsql`) — the Product Group's AI-assisted Oracle migration tooling</br>
+**Companion to:** *Backup, Restore & Point-in-Time Restore — Workshop for Oracle DBAs*</br>
 
 ---
 
 ## 0. Why the pre-migration phase decides the outcome
 
-An Oracle → PostgreSQL migration is a **heterogeneous** migration. This is not SQL Server → Azure SQL, where the engine is essentially the same on both sides. Oracle and PostgreSQL differ in SQL dialect, procedural language, data types, transaction semantics, and operational tooling.
+An Oracle → PostgreSQL migration is a **heterogeneous** migration. This is not SQL Server → Azure SQL, where the engine is essentially the same on both sides. Oracle and PostgreSQL differ in SQL dialect, procedural language, data types, transaction semantics, and operational tooling.</br>
 
-The consequence: **the work is front-loaded.** Migrations that fail rarely fail at the data-copy step — they fail because an assessment was skipped, a dependency was undiscovered, or "the application just uses standard SQL" turned out to be false.
+The consequence: **the work is front-loaded.** Migrations that fail rarely fail at the data-copy step — they fail because an assessment was skipped, a dependency was undiscovered, or "the application just uses standard SQL" turned out to be false.</br>
 
-**What has changed:** the Azure Database for PostgreSQL Product Group now ships first-party, AI-assisted migration tooling directly inside the **PostgreSQL extension for Visual Studio Code**. It converts schema *and* application code, validates every converted object against a real PostgreSQL scratch database before emitting it, and produces the conversion report that becomes your assessment. This materially changes how you run the pre-migration phase — the tool now produces the authoritative gap list, not a spreadsheet estimate.
+**What has changed:** the Azure Database for PostgreSQL Product Group now ships first-party, AI-assisted migration tooling directly inside the **PostgreSQL extension for Visual Studio Code**. It converts schema *and* application code, validates every converted object against a real PostgreSQL scratch database before emitting it, and produces the conversion report that becomes your assessment. This materially changes how you run the pre-migration phase — the tool now produces the authoritative gap list, not a spreadsheet estimate.</br>
 
-> **Rule of thumb to set expectations with the customer:** in a typical Oracle → PostgreSQL project, data movement is a small fraction of the effort. Schema conversion, PL/SQL conversion, application remediation, and testing dominate. The extension compresses the first two substantially — it does not remove the need for review, testing, or application ownership.
+> In a typical Oracle → PostgreSQL project, data movement is a small fraction of the effort. Schema conversion, PL/SQL conversion, application remediation, and testing **dominate**. The extension compresses the first two substantially — it does not remove the need for review, testing, or application ownership.
 
 **The four pre-migration stages, in strict order:**
 
@@ -63,7 +63,7 @@ Do not let a project skip from Discover to data movement. Every stage below has 
 > | 12:17 | Side-by-side file diff |
 > | 13:30 | Where to get the extension and learn more |
 >
-> **Determinism and self-correction (00:36 and 04:56) are the two segments that answer the skeptical DBA's real question:** "why would I trust an AI to convert my PL/SQL?" Play those two before the demo.
+> **Determinism and self-correction (00:36 and 04:56) are the two segments that answer the skeptical DBA's real question:** "why would I trust an AI to convert my PL/SQL?".
 
 ### 1.1 What the tooling actually is
 
@@ -75,7 +75,7 @@ The PostgreSQL extension for Visual Studio Code provides an **end-to-end Oracle 
 
 This sequencing is the single most important thing to get right.
 
-**Pass 1 — Schema conversion**
+#### **Pass 1 — Schema conversion**
 
 Reads the Oracle data dictionary for the schemas you select, groups extracted objects into **dependency-ordered chunks**, and converts each chunk using your Microsoft Foundry deployment. Converted objects are **compiled against the scratch database before they're written out — so the DDL you receive is verified rather than a best guess.**
 
@@ -88,7 +88,7 @@ A run produces four artifacts:
 | **Review tasks** — objects needing human judgment (fallback DDL, behavior differences) | Triage into mechanical / semantic / redesign (§4.4) |
 | **Coding notes** — Oracle patterns found and how they map to PostgreSQL | Input to Pass 2, and to the application team |
 
-**Pass 2 — Application conversion**
+#### **Pass 2 — Application conversion**
 
 Targets the Oracle-specific code *surrounding* the database: **SQL scripts, stored procedure calls, loader control files, shell scripts, and Java files.** It consumes the **coding notes from schema conversion as input**, so converted application code lines up with the object names, types, and calling conventions schema conversion actually produced.
 
