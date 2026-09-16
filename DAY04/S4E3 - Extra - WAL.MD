@@ -6,7 +6,7 @@
 
 ---
 
-## 0. The one rule that explains everything
+## 0. The 60-second summary
 
 > **Write-Ahead Rule:** *a change is never written to the data files until the log record describing that change is safely on durable storage.*
 

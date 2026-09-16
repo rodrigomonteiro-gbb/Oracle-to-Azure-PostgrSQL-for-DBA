@@ -4,14 +4,9 @@
 
 ### Tooling-led approach using the PostgreSQL extension for Visual Studio Code
 
-**Audience:** Oracle DBAs, data architects, application owners, and the migration lead</br>
-**Scope:** Everything that happens **before** the first row of production data moves</br>
-**Primary tool:** PostgreSQL extension for Visual Studio Code (Microsoft, `ms-ossdata.vscode-pgsql`) — the Product Group's AI-assisted Oracle migration tooling</br>
-**Companion to:** *Backup, Restore & Point-in-Time Restore — Workshop for Oracle DBAs*</br>
-
 ---
 
-## 0. Why the pre-migration phase decides the outcome
+## 0. The 60-second summary
 
 An Oracle → PostgreSQL migration is a **heterogeneous** migration. This is not SQL Server → Azure SQL, where the engine is essentially the same on both sides. Oracle and PostgreSQL differ in SQL dialect, procedural language, data types, transaction semantics, and operational tooling.</br>
 

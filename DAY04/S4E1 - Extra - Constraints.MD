@@ -4,7 +4,7 @@
 
 ---
 
-## 0. The short answer to the question
+## 0. The 60-second summary
 
 > **Do PK / UNIQUE / FK constraints create indexes in PostgreSQL?**
 
