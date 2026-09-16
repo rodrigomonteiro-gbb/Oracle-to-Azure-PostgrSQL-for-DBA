@@ -127,24 +127,11 @@
 
 ## 3. Hands-on: the core commands
 
-Set variables once:
-
-```bash
-RG=rg-pg-workshop
-SRC=pg-prod-01
-TGT=pg-restore-01
-LOC=eastus2
-```
-
 ### 3.1 Inspect current backup configuration
-```bash
-az postgres flexible-server show \
-  --resource-group $RG --name $SRC \
-  --query "{retention:backup.backupRetentionDays, geo:backup.geoRedundantBackup, earliest:backup.earliestRestoreDate}" -o table
-```
 
 </br>
-```PowerShell
+
+```powershell
 # Az PowerShell path
 Install-Module -Name Az.PostgreSql -Scope CurrentUser -Force   # first time only
 Connect-AzAccount
@@ -162,8 +149,18 @@ az account set --subscription "<subscription-id-or-name>"
 Set your variables once:</br>
 
 ```powershell
+$RG   = 'rg-pg-workshop'
+$SRC  = 'pg-prod-01'
+$TGT  = 'pg-restore-01'
+$LOC  = 'eastus2'
+$PAIR = 'westus2'        # paired region, for geo-restore
+$ADMIN = 'pgadmin'
 $srv = Get-AzPostgreSqlFlexibleServer -ResourceGroupName $RG -Name $SRC
+```
 
+inspect current backup configuration
+
+```powershell
 [pscustomobject]@{
     Server          = $srv.Name
     Location        = $srv.Location
