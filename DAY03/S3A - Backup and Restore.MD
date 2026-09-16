@@ -138,15 +138,10 @@ Connect-AzAccount
 Set-AzContext -Subscription "<subscription-id-or-name>"
 ```
 
-```azurecli
-# Azure CLI path (same shell is fine)
-az login
-az account set --subscription "<subscription-id-or-name>"
-```
 
 > **Oracle analogy**: this is your sqlplus / rman target / connection step — except the "target" is the Azure control plane, not the database engine. None of these commands connect to Postgres itself; they talk to ARM. The only section that touches the database is 3.6.
 
-Set your variables once:</br>
+#### Set your variables once:</br>
 
 ```powershell
 $RG   = 'rg-pg-workshop'
@@ -161,8 +156,10 @@ $PAIR = 'westus2'        # paired region, for geo-restore
 $ADMIN = 'pgadmin'
 $srv = Get-AzPostgreSqlFlexibleServer -ResourceGroupName $RG -Name $SRC
 ```
+> note: we are using several $TGT variables, each one will be used for one restore operation. make sure to set them with different values, as Target for restore operations must be new Servers.
+</br>
 
-inspect current backup configuration
+#### inspect current backup configuration
 
 ```powershell
 [pscustomobject]@{
