@@ -622,7 +622,7 @@ Remove-Item Env:\PGPASSWORD
 
 ---
 
-## 6. Oracle → PostgreSQL translation glossary
+## 5. Oracle → PostgreSQL translation glossary
 
 | Oracle | Azure PostgreSQL Flexible Server |
 |---|---|
@@ -644,7 +644,7 @@ Remove-Item Env:\PGPASSWORD
 
 ---
 
-## 7. Post-restore cutover runbook (hand out as a template)
+## 6. Post-restore cutover runbook (hand out as a template)
 
 After **every** restore, before declaring recovery complete:
 
@@ -664,7 +664,7 @@ After **every** restore, before declaring recovery complete:
 
 ---
 
-## 8. Design decisions to make before go-live
+## 7. Design decisions to make before go-live
 
 | Decision | Options | Guidance |
 |---|---|---|
@@ -677,7 +677,7 @@ After **every** restore, before declaring recovery complete:
 
 ---
 
-## 9. FAQ — the questions Oracle DBAs always ask
+## 8. FAQ — the questions Oracle DBAs always ask
 
 **"Can I restore over the existing server?"** No. Every restore produces a new server; cutover is your responsibility. Plan for it.
 
@@ -697,7 +697,7 @@ After **every** restore, before declaring recovery complete:
 
 ---
 
-## 10. Key takeaways (closing slide)
+## 9. Key takeaways (closing slide)
 
 1. Backups are automatic — **your job is retention, redundancy, and drills.**
 2. **Restore = new server.** Rehearse the cutover, not just the restore.
