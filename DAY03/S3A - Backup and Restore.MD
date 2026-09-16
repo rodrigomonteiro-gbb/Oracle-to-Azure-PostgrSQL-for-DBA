@@ -92,7 +92,7 @@
 3 **save**.</br>
 
 
-![Changed Backup Retention](images/backup-03-ChangedRetention-Save.png)
+![Changed Backup Retention](images/backup-06-changed-Retention-GeoRedundancy.png)
 
 
 
