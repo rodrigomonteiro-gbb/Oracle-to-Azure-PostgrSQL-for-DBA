@@ -151,7 +151,11 @@ Set your variables once:</br>
 ```powershell
 $RG   = 'rg-pg-workshop'
 $SRC  = 'pg-prod-01'
-$TGT  = 'pg-restore-01'
+$TGT1  = 'pg-restore-01'
+$TGT2  = 'pg-restore-02'
+$TGT3  = 'pg-restore-03'
+$TGT4  = 'pg-restore-04'
+$TGT5  = 'pg-restore-05'
 $LOC  = 'eastus2'
 $PAIR = 'westus2'        # paired region, for geo-restore
 $ADMIN = 'pgadmin'
@@ -190,49 +194,186 @@ Get-AzPostgreSqlFlexibleServer |
 
 
 ### 3.2 Change retention (7–35 days)
-```bash
-az postgres flexible-server update \
-  --resource-group $RG --name $SRC \
-  --backup-retention 35
+
+```powershell
+Update-AzPostgreSqlFlexibleServer `
+    -ResourceGroupName $RG `
+    -Name $SRC `
+    -BackupRetentionDay 35
+
+# Confirm it landed
+(Get-AzPostgreSqlFlexibleServer -ResourceGroupName $RG -Name $SRC).BackupRetentionDay
 ```
+
+#### Bulk-remediate every server still sitting on the 7-day default:
+
+```powershell
+Get-AzPostgreSqlFlexibleServer |
+    Where-Object { $_.BackupRetentionDay -lt 14 } |
+    ForEach-Object {
+        Write-Host "Raising retention on $($_.Name) from $($_.BackupRetentionDay) to 35 days"
+        Update-AzPostgreSqlFlexibleServer -ResourceGroupName $_.Id.Split('/')[4] `
+                                          -Name $_.Name `
+                                          -BackupRetentionDay 35
+    }
+```
+
+> ⚠️ **Retention is the only backup property you can change after creation**. Backup redundancy (geo) is create-time only — no cmdlet or CLI flag will retrofit it. Raising retention increases billable backup storage beyond your provisioned storage size.
 
 ### 3.3 Point-in-time restore to a timestamp
-```bash
-az postgres flexible-server restore \
-  --resource-group $RG \
-  --name $TGT \
-  --source-server $SRC \
-  --restore-time "2026-09-15T14:30:00Z"
+
+```powershell
+# Always build the timestamp explicitly in UTC
+$restorePoint = [datetime]::SpecifyKind('2026-09-15T14:30:00', [System.DateTimeKind]::Utc)
+
+Restore-AzPostgreSqlFlexibleServer `
+    -ResourceGroupName $RG `
+    -Name $TGT1 `
+    -SourceServerName $SRC `
+    -RestorePointInTime $restorePoint
 ```
+
 > Use **UTC**. Teach the team to record incident timestamps in UTC — mixing local time and UTC is the #1 cause of a "restored to the wrong minute" do-over.
 
-### 3.4 Restore to latest restore point
-```bash
-az postgres flexible-server restore \
-  --resource-group $RG --name $TGT --source-server $SRC
+#### Measure the restore — this is the number that becomes your documented **RTO**:
+
+```powershell
+# Always build the timestamp explicitly in UTC
+$sw = [System.Diagnostics.Stopwatch]::StartNew()
+
+Restore-AzPostgreSqlFlexibleServer -ResourceGroupName $RG -Name $TGT2 `
+                                   -SourceServerName $SRC `
+                                   -RestorePointInTime $restorePoint
+$sw.Stop()
+"Restore completed in {0:N1} minutes" -f $sw.Elapsed.TotalMinutes
 ```
+
+#### Long restores — hand it off and keep working:
+
+```powershell
+$job = Restore-AzPostgreSqlFlexibleServer -ResourceGroupName $RG -Name $TGT3 `
+                                          -SourceServerName $SRC `
+                                          -RestorePointInTime $restorePoint `
+                                          -AsJob
+$job | Wait-Job | Receive-Job
+```
+
+</br>
+> This is RECOVER DATABASE UNTIL TIME — with two differences worth saying out loud to the room: there is no RESTORE step to run first, and the result is a brand-new server, not your source recovered in place. </br>
+ </br>
+⚠️ **Always use UTC**. -RestorePointInTime takes a [DateTime]; if you pass an unqualified local-time string, PowerShell will interpret it with the kind of the machine you're on. SpecifyKind(...Utc) removes all ambiguity. Record incident timestamps in UTC from the start — mixing local time and UTC is the #1 cause of a "restored to the wrong minute" do-over.</br>
+
+### 3.4 Restore to latest restore point
+
+</br>
+The Az cmdlet requires -RestorePointInTime, so "latest" is expressed as a few minutes ago — safely inside the archived-WAL window:
+
+```powershell
+$latest = (Get-Date).ToUniversalTime().AddMinutes(-5)
+
+Restore-AzPostgreSqlFlexibleServer `
+    -ResourceGroupName $RG `
+    -Name $TGT4 `
+    -SourceServerName $SRC `
+    -RestorePointInTime $latest
+```
+
+</br>
+
+> Why -5 minutes? **WAL** is archived as segments fill, so the true latest restore point trails "now" by up to ~5 minutes (your RPO). Asking for a timestamp in the future — or inside that trailing gap — fails. Fast restore point (snapshot only, no WAL replay — the fastest option) is a portal choice in the restore wizard; use it when speed matters more than the exact second.
 
 ### 3.5 Geo-restore to the paired region (GRS servers only)
-```bash
-az postgres flexible-server geo-restore \
-  --resource-group $RG \
-  --name pg-dr-01 \
-  --source-server $SRC \
-  --location westus2
+
+</br>
+**PowerShell (Az module)** — same cmdlet, -UseGeoRestore switch:
+</br>
+
+```powershell
+# Confirm the source is actually geo-redundant BEFORE you rely on this in a drill
+$srv = Get-AzPostgreSqlFlexibleServer -ResourceGroupName $RG -Name $SRC
+if ($srv.BackupGeoRedundantBackup -ne 'Enabled') {
+    throw "Server $SRC is NOT geo-redundant. Geo-restore is unavailable and cannot be enabled after creation."
+}
+
+$geoPoint = (Get-Date).ToUniversalTime().AddMinutes(-10)
+
+Restore-AzPostgreSqlFlexibleServer `
+    -ResourceGroupName $RG `
+    -Name 'pg-dr-01' `
+    -SourceServerName $SRC `
+    -RestorePointInTime $geoPoint `
+    -UseGeoRestore `
+    -Sku 'Standard_D4s_v3' `
+    -Tag @{ purpose = 'dr-drill'; owner = 'dba-team' }
 ```
+
+</br>
+
+> **This is your off-site tape restore to the DR site**. It works only if geo-redundant backup was selected when the source server was created. The guard clause above is deliberate — discovering GRS was never enabled during an actual regional outage is the worst possible time to find out. Restoring to a larger SKU (-Sku) shortens replay and validation; scale down after cutover.
 
 ### 3.6 Logical backup — the tool they already understand
-```bash
-# Whole database, custom format (parallel-restorable) — like expdp
-pg_dump -h $SRC.postgres.database.azure.com -U pgadmin -d salesdb -Fc -f salesdb.dump
+
+</br>
+These invoke the native PostgreSQL client tools, so the syntax is identical to what the team already knows — only the credential handling is PowerShell-specific.
+
+```powershell
+$SrcFqdn = "$SRC.postgres.database.azure.com"
+$TgtFqdn = "$TGT5.postgres.database.azure.com"
+
+# Supply the password to the client tools without putting it on the command line
+$env:PGPASSWORD = (Read-Host -Prompt 'Postgres admin password' -AsSecureString |
+                   ConvertFrom-SecureString -AsPlainText)
+
+# Whole database, custom format (parallel-restorable)  -- like expdp
+pg_dump -h $SrcFqdn -U $ADMIN -d salesdb -Fc -f salesdb.dump
 
 # Single table only
-pg_dump -h $SRC.postgres.database.azure.com -U pgadmin -d salesdb -Fc -t public.orders -f orders.dump
+pg_dump -h $SrcFqdn -U $ADMIN -d salesdb -Fc -t public.orders -f orders.dump
 
-# Restore into a target, 4 parallel jobs — like impdp
-pg_restore -h $TGT.postgres.database.azure.com -U pgadmin -d salesdb -j 4 orders.dump
+# Schema only / data only
+pg_dump -h $SrcFqdn -U $ADMIN -d salesdb -Fc --schema-only -f salesdb_schema.dump
+pg_dump -h $SrcFqdn -U $ADMIN -d salesdb -Fc --data-only   -f salesdb_data.dump
+
+# Restore into the target, 4 parallel jobs  -- like impdp
+pg_restore -h $TgtFqdn -U $ADMIN -d salesdb -j 4 orders.dump
+
+# Inspect a dump without restoring it  -- like impdp SQLFILE=
+pg_restore --list orders.dump
+
+# Clean up the credential
+Remove-Item Env:\PGPASSWORD
 ```
-> **Say this clearly:** `pg_dump` is **not** your DR strategy — it has no PITR, no consistency across databases, and long runtimes at scale. It is your **object-level and portability** tool. Platform backup is your DR strategy.
+
+
+#### Timestamped dumps of several databases, with retention pruning:
+
+</br>
+
+```powershell
+$BackupDir = 'C:\pgdumps'
+$stamp     = (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmss')
+New-Item -ItemType Directory -Path $BackupDir -Force | Out-Null
+
+'salesdb','hrdb','inventorydb' | ForEach-Object {
+    $out = Join-Path $BackupDir "$_-$stamp.dump"
+    Write-Host "Dumping $_ -> $out"
+    pg_dump -h $SrcFqdn -U $ADMIN -d $_ -Fc -f $out
+    if ($LASTEXITCODE -ne 0) { Write-Warning "pg_dump FAILED for $_ (exit $LASTEXITCODE)" }
+}
+
+# Keep 14 days of local dumps
+Get-ChildItem $BackupDir -Filter *.dump |
+    Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-14) } |
+    Remove-Item -Force
+```
+
+</br>
+
+> ⚠️ Always check $LASTEXITCODE after a native tool call — PowerShell will not throw on a pg_dump failure, so an unchecked loop happily produces a directory full of truncated dumps. That is the logical-backup equivalent of a Data Pump job that ended with errors nobody read.</br>
+ **Remember** `pg_dump` is **not** your DR strategy — it has no PITR, no consistency across databases, and long runtimes at scale. It is your **object-level and portability** tool. Platform backup is your DR strategy.
+</br>
+
+
 
 ---
 
