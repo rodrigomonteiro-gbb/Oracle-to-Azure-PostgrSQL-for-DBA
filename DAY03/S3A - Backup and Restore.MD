@@ -88,11 +88,11 @@
 #### Modifying backup retention and GeoRedundancy
 
 1 move the slider up to **35 days**</br>
-2 check the GeoRedundancy checkbox</br>
+2 check the Geo-redundancy checkbox</br>
 3 **save**.</br>
 
 
-![Changed Backup Retention](images/backup-06-changed-Retention-GeoRedundancy.png)
+![Change Retention & Geo-redundancy](images/backup-06-changed-Retention-GeoRedundancy.png)
 
 
 
@@ -114,7 +114,8 @@
 | **Vaulted / LTR restore** | Compliance, audit, ransomware, "give me March 2024" | Long-term tape retrieval | Restore **as files** to a storage container, then load into a server |
 | **`pg_dump` / `pg_restore`** | Single table/schema, move across clouds/versions | Data Pump (`expdp`/`impdp`) | Logical, portable, object-level |
 
-### 2.1 Critical constraints to state out loud
+### 2.1 Critical constraints
+
 1. **Restore always creates a NEW server.** There is no in-place restore and no "restore over the top". Plan the **cutover**: DNS/app connection string, firewall/VNet rules, parameters, roles/logins, extensions, PgBouncer setting, monitoring, HA re-enable.
 2. **PITR is same-region**, except geo-restore, which targets the paired region.
 3. **You cannot restore a single table with PITR.** Table-level recovery = restore a server to the timestamp, then `pg_dump -t` the table out and load it into production. (This is the equivalent of Oracle table-level RMAN recovery via an auxiliary instance — same pattern, fewer moving parts.)
@@ -141,6 +142,55 @@ az postgres flexible-server show \
   --resource-group $RG --name $SRC \
   --query "{retention:backup.backupRetentionDays, geo:backup.geoRedundantBackup, earliest:backup.earliestRestoreDate}" -o table
 ```
+
+</br>
+```PowerShell
+# Az PowerShell path
+Install-Module -Name Az.PostgreSql -Scope CurrentUser -Force   # first time only
+Connect-AzAccount
+Set-AzContext -Subscription "<subscription-id-or-name>"
+```
+
+```azurecli
+# Azure CLI path (same shell is fine)
+az login
+az account set --subscription "<subscription-id-or-name>"
+```
+
+> **Oracle analogy**: this is your sqlplus / rman target / connection step — except the "target" is the Azure control plane, not the database engine. None of these commands connect to Postgres itself; they talk to ARM. The only section that touches the database is 3.6.
+
+Set your variables once:</br>
+
+```powershell
+$srv = Get-AzPostgreSqlFlexibleServer -ResourceGroupName $RG -Name $SRC
+
+[pscustomobject]@{
+    Server          = $srv.Name
+    Location        = $srv.Location
+    Version         = $srv.Version
+    Sku             = $srv.SkuName
+    StorageGb       = $srv.StorageSizeGb
+    RetentionDays   = $srv.BackupRetentionDay
+    GeoRedundant    = $srv.BackupGeoRedundantBackup
+    EarliestRestore = $srv.BackupEarliestRestoreDate
+} | Format-List
+```
+
+Inventory the whole estate at once — useful as a governance check before the workshop:
+
+```powershell
+Get-AzPostgreSqlFlexibleServer |
+    Select-Object Name, Location,
+        @{n='RetentionDays';e={$_.BackupRetentionDay}},
+        @{n='GeoRedundant'; e={$_.BackupGeoRedundantBackup}},
+        @{n='EarliestRestore';e={$_.BackupEarliestRestoreDate}} |
+    Sort-Object RetentionDays |
+    Format-Table -AutoSize
+```
+
+> **Read this like LIST BACKUP SUMMARY**. EarliestRestoreDate is your recovery window floor — the equivalent of asking "how far back does my FRA actually go?" Anything older is already deleted and unrecoverable.
+
+
 
 ### 3.2 Change retention (7–35 days)
 ```bash
