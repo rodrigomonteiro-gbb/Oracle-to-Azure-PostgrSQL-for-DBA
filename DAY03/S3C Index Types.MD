@@ -88,7 +88,7 @@ A heap is an unordered collection of 8 KB pages. Rows land wherever there is fre
 | Physical row address | RID | `ROWID` (stable) | **`ctid` (NOT stable — changes on UPDATE)`** |
 | Table organized by key | Clustered index | Index-Organized Table (IOT) | **No equivalent** (see §2) |
 
-> ⚠️ **The single most important difference for both audiences:** `ctid` is **not** an Oracle `ROWID`. PostgreSQL's MVCC creates a **new row version** on every `UPDATE`, at a new physical location. A row's `ctid` changes whenever it is updated or the table is vacuumed/reorganized. Never store it, never build application logic on it.
+> ⚠️ **The single most important difference for both ORACLE and PostgreSQL DBAs:** `ctid` is **not** an Oracle `ROWID`. PostgreSQL's MVCC creates a **new row version** on every `UPDATE`, at a new physical location. A row's `ctid` changes whenever it is updated or the table is vacuumed/reorganized. Never store it, never build application logic on it.
 
 ### 1.2 Why this matters for indexing
 
