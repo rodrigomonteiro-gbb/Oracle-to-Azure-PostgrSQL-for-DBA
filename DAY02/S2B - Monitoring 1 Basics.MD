@@ -2,11 +2,6 @@
 
 ## Diagnostics in Log Analytics (`ArcBox-law`, Central US) — Resource-Specific tables
 
-**Workspace:** `ArcBox-law` (Central US)</br>
-**Diagnostic setting:** All Logs + All Metrics</br>
-**Destination table mode:** **Resource specific**</br>
-**Every query below is parameterized** — edit the `let` block at the top of each query and nothing else.</br>
-
 ---
 
 ## Getting started — opening the KQL editor
