@@ -412,6 +412,9 @@ One structural difference worth naming: a SQL Server nonclustered index leaf poi
 **Use case:** the default answer for OLTP selective lookups, foreign keys, range filters, and sort avoidance. **Roughly 90%+ of PostgreSQL indexes in production are B-trees**, and that is correct — reach for an exotic type only when the data type or query shape demands it.
 
 ### 3.3 Demo — the fundamental win
+### 3.3 Demo — the fundamental win
+
+**Setup**
 
 ```sql
 SET search_path TO idxlab, public;
@@ -425,12 +428,12 @@ CREATE TABLE btree_demo (
     signup_date  timestamptz NOT NULL,
     country      char(2)     NOT NULL,
     lifetime_val numeric(12,2) NOT NULL
-);
+) WITH (fillfactor = 90);
 
 INSERT INTO btree_demo (email, last_name, signup_date, country, lifetime_val)
 SELECT 'user' || g || '@example.com',
        (ARRAY['Silva','Smith','Nakamura','Okafor','Dubois','Rossi','Kim','Muller'])[1 + (g % 8)] || g % 997,
-       now() - ((random() * 1500) || ' days')::interval,
+       now() - (random() * 1500) * interval '1 day',
        (ARRAY['US','BR','DE','JP','IN','GB'])[1 + (g % 6)],
        (random() * 10000)::numeric(12,2)
 FROM generate_series(1, 3000000) g;
@@ -440,7 +443,54 @@ ANALYZE btree_demo;
 SELECT pg_size_pretty(pg_total_relation_size('btree_demo')) AS table_size;
 ```
 
+> **⚠ Two changes from the naive version of this script — both matter**
+>
+> **1. The interval is multiplied, not concatenated.** The original form
+> `((random() * 1500) || ' days')::interval` forces a `double precision` through
+> **text**, and PostgreSQL renders float8 values below `0.0001` in **scientific
+> notation**. When `random()` returns a small enough value the parser receives
+> `'8.42e-05 days'` and the load dies with:
+>
+> ```
+> ERROR:  invalid input syntax for type interval: "8.420012751031436e-05 days"
+> SQL state: 22007
+> ```
+>
+> The failure is probabilistic, so it passes in rehearsal at 30k rows and fires
+> in front of the room at 3M. `(random() * 1500) * interval '1 day'` never
+> converts to text, so it cannot fail — and it is marginally faster.
+>
+> **2. `fillfactor = 90`.** A freshly loaded table is packed to ~100% full, which
+> leaves no room on a page for a new row version. **Step 6's HOT demonstration
+> needs that free space to work** — at the default fillfactor the "cheap" update
+> may not get HOT either, and the contrast collapses. Reserving 10% makes the
+> Step 6 result reliable.
+
+> **Load time:** expect roughly 20–60 seconds for 3M rows. Run it during the
+> previous slide, or pre-load before the session.
+
+---
+
 **Step 1 — baseline (no index on `email`)**
+
+```sql
+-- The demo predicate is deterministic: id == g, so row N is always
+-- 'userN@example.com'. Verify once, then reuse the literal in Step 3.
+SELECT id, email FROM btree_demo WHERE id = 1750000;
+
+-- Warm the cache so Step 1 and Step 3 are compared on equal footing.
+-- Without this, Step 1 pays cold-read costs that Step 3 does not, and the
+-- comparison overstates the win for the wrong reason.
+SELECT count(*) FROM btree_demo;
+```
+
+```sql
+-- >>> THE DEMO QUERY — must be byte-for-byte identical in Step 3 <<<
+EXPLAIN (ANALYZE, BUFFERS, COSTS OFF)
+SELECT id, email, last_name, signup_date, lifetime_val
+FROM   btree_demo
+WHERE  email = 'user1750000@example.com';
+```
 
 > **👁 What to look for in this plan**
 >
@@ -456,6 +506,90 @@ SELECT pg_size_pretty(pg_total_relation_size('btree_demo')) AS table_size;
 > | **`actual time=`** | Hundreds of ms. Record it. |
 >
 > **Note the `rows=1` on the top node against the buffer count.** That ratio — one row returned, an entire table read — is the single clearest justification for an index you can show a room.
+>
+> **Write down two numbers before moving on: the `Buffers: shared` total and the
+> `Execution Time`.** Step 3's payoff is the ratio between them, and scrolling
+> back mid-demo kills the moment.
+
+**Capture the baseline for the Step 3 side-by-side**
+
+This harness stores the plan itself, so the comparison is exact and reproducible
+instead of read off the screen. It avoids `pg_stat_statements` entirely — see
+**Appendix 3.3-A** for why that matters.
+
+```sql
+-- The harness lives in the lab schema, NOT in pg_temp.
+-- Temp objects die with the session, and pgAdmin / DBeaver routinely open a
+-- separate connection per query tab -- which is how "relation plan_capture does
+-- not exist" turns up halfway through a demo.
+DROP TABLE IF EXISTS idxlab.plan_capture CASCADE;
+
+CREATE TABLE idxlab.plan_capture (
+    phase    text,
+    captured timestamptz DEFAULT clock_timestamp(),
+    plan     jsonb
+);
+
+CREATE OR REPLACE FUNCTION idxlab.capture_plan(p_phase text, p_sql text)
+RETURNS void LANGUAGE plpgsql AS $fn$
+DECLARE v json;
+BEGIN
+    EXECUTE 'EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ' || p_sql INTO v;
+    INSERT INTO idxlab.plan_capture (phase, plan) VALUES (p_phase, v::jsonb);
+END
+$fn$;
+
+CREATE OR REPLACE VIEW idxlab.plan_summary AS
+SELECT c.phase,
+       c.plan->0->'Plan'->>'Node Type' AS node_type,
+       COALESCE((c.plan->0->'Plan'->>'Shared Hit Blocks')::bigint, 0)
+     + COALESCE((c.plan->0->'Plan'->>'Shared Read Blocks')::bigint, 0) AS buffers,
+       GREATEST(
+           COALESCE((c.plan->0->'Plan'->>'Rows Removed by Filter')::bigint, 0),
+           COALESCE((c.plan->0->'Plan'->'Plans'->0->>'Rows Removed by Filter')::bigint, 0),
+           COALESCE((c.plan->0->'Plan'->'Plans'->0->'Plans'->0->>'Rows Removed by Filter')::bigint, 0)
+       ) AS rows_discarded,
+       round((c.plan->0->>'Execution Time')::numeric, 3) AS exec_ms
+FROM   idxlab.plan_capture c;
+```
+
+```sql
+-- Record the BEFORE measurement
+SELECT idxlab.capture_plan('BEFORE', $q$
+    SELECT id, email, last_name, signup_date, lifetime_val
+    FROM   btree_demo
+    WHERE  email = 'user1750000@example.com'
+$q$);
+
+SELECT * FROM idxlab.plan_summary;
+```
+
+> **Notes on the harness**
+>
+> - It runs the demo query a **second** time. That is intentional — same query,
+>   same conditions, now captured as data rather than screen output.
+> - **Plain tables, not `TEMP`.** See the warning above: GUI clients open
+>   connections per tab, and temp objects do not survive that.
+> - **No `jsonpath`.** `rows_discarded` is read by walking three levels of the
+>   plan tree with plain `->` operators, which works on every supported
+>   PostgreSQL version. Three levels covers the shapes this module produces
+>   (`Gather` → `Parallel Seq Scan`, and `Limit` → `Sort` → `Seq Scan`). If you
+>   add a deeper query later, add another `COALESCE` line to the `GREATEST`.
+> - Buffer counts on the top node are **cumulative** — they include child nodes
+>   and parallel workers. Cross-check against the `EXPLAIN` text the first time
+>   you run this on a new box.
+>
+> **If the view still fails to create,** run this to isolate it — each line
+> should return a value, and the first one that errors is your cause:
+>
+> ```sql
+> SELECT version();                                   -- confirm major version
+> SELECT count(*) FROM idxlab.plan_capture;           -- object exists in THIS connection?
+> SELECT pg_typeof(plan) FROM idxlab.plan_capture LIMIT 1;   -- must be jsonb, not json
+> SELECT plan->0->'Plan'->>'Node Type' FROM idxlab.plan_capture LIMIT 1;
+> ```
+
+---
 
 **Step 2 — create the index**
 
@@ -466,7 +600,17 @@ CREATE INDEX ix_btree_demo_email ON btree_demo (email);
 ANALYZE btree_demo;
 ```
 
+---
+
 **Step 3 — re-measure**
+
+```sql
+-- >>> IDENTICAL DEMO QUERY — do not change a character <<<
+EXPLAIN (ANALYZE, BUFFERS, COSTS OFF)
+SELECT id, email, last_name, signup_date, lifetime_val
+FROM   btree_demo
+WHERE  email = 'user1750000@example.com';
+```
 
 > **👁 What to look for in this plan — the four changes that define what an index does**
 >
@@ -480,12 +624,60 @@ ANALYZE btree_demo;
 >
 > **How to quantify the win for a slide:** divide the Step 1 buffer total by this one. On a 3M-row table that ratio is typically **10,000× or better**. Express the gain in *pages*, not milliseconds — page counts are reproducible on any hardware, timings are not.
 
+> **If the room asks "why still 4–6 pages and not 1?"** — that is the B-tree
+> descent made visible. Root, one or two internal levels, a leaf, then the heap
+> page holding the row. Point out that going from 3M rows to 300M rows adds
+> roughly **one** page to that count. That is the whole argument for B-trees.
+
+**The side-by-side — this is the slide**
+
+```sql
+-- Record the AFTER measurement (identical query text)
+SELECT idxlab.capture_plan('AFTER', $q$
+    SELECT id, email, last_name, signup_date, lifetime_val
+    FROM   btree_demo
+    WHERE  email = 'user1750000@example.com'
+$q$);
+
+-- Both rows, side by side
+SELECT * FROM idxlab.plan_summary ORDER BY phase DESC;   -- BEFORE first, then AFTER
+```
+
+```sql
+-- And the headline ratio, in one row
+SELECT b.node_type          AS before_node,
+       a.node_type          AS after_node,
+       b.buffers            AS before_buffers,
+       a.buffers            AS after_buffers,
+       round(b.buffers::numeric / NULLIF(a.buffers, 0))   AS buffer_reduction_x,
+       b.rows_discarded     AS before_rows_discarded,
+       a.rows_discarded     AS after_rows_discarded,
+       b.exec_ms            AS before_ms,
+       a.exec_ms            AS after_ms,
+       round(b.exec_ms / NULLIF(a.exec_ms, 0))            AS time_reduction_x
+FROM   idxlab.plan_summary b
+JOIN   idxlab.plan_summary a ON a.phase = 'AFTER'
+WHERE  b.phase = 'BEFORE';
+```
+
+> **Reading this output to the room:** `before_node` → `after_node` is the access
+> method changing. `before_rows_discarded` → `after_rows_discarded` goes from ~3M
+> to **0**. `buffer_reduction_x` is the number to put on the slide — it is a
+> **page count ratio**, so it reproduces on any hardware, where
+> `time_reduction_x` will not.
+>
+> Quote the buffer ratio. Mention the time ratio only as corroboration.
+
+---
+
 **Step 4 — price the index**
 
 ```sql
 SELECT pg_size_pretty(pg_relation_size('ix_btree_demo_email')) AS index_size,
        pg_size_pretty(pg_relation_size('btree_demo'))          AS heap_size;
 ```
+
+---
 
 **Step 5 — sort avoidance, the benefit people forget**
 
@@ -501,27 +693,40 @@ SELECT pg_size_pretty(pg_relation_size('ix_btree_demo_email')) AS index_size,
 >
 > **In the SECOND plan (after the index), look for:**
 > - **The `Sort` node is GONE.** This is the entire point — watch for its *absence*.
-> - **`Index Scan Backward using ix_btree_demo_signup`** (or forward, given the `DESC` index). PostgreSQL walks the leaf level, takes 20 entries, and stops.
+> - **`Index Scan using ix_btree_demo_signup`** (forward, because the index is already stored `DESC`; on a default `ASC` index you would see `Index Scan Backward` instead — either is correct). PostgreSQL walks the leaf level, takes 20 entries, and stops.
 > - **`Buffers`** measured in single or low double digits instead of hundreds of thousands.
 > - The scan node's `actual rows=20`, not 3,000,000 — **`LIMIT` now genuinely limits the work done**, rather than limiting output after all the work.
 >
 > **Why this matters operationally:** "top N", "most recent", and paginated screens are everywhere in OLTP. Each one is a full sort unless an index provides the order. Sorts consume `work_mem` per concurrent query — so this optimization protects memory across the whole server, not just one query's latency.
+
+```sql
+-- BEFORE: no index on signup_date — PostgreSQL must sort 3M rows to find 20
 EXPLAIN (ANALYZE, BUFFERS, COSTS OFF)
 SELECT id, signup_date FROM btree_demo ORDER BY signup_date DESC LIMIT 20;
 
 CREATE INDEX ix_btree_demo_signup ON btree_demo (signup_date DESC);
 ANALYZE btree_demo;
 
--- Now: walk 20 entries off the end of the index. No sort at all.
+-- AFTER: walk 20 entries off the end of the index. No sort at all.
 EXPLAIN (ANALYZE, BUFFERS, COSTS OFF)
 SELECT id, signup_date FROM btree_demo ORDER BY signup_date DESC LIMIT 20;
 ```
+
+> **Optional, if the `Sort` shows `Memory` rather than `Disk`:** force the spill
+> so the "external merge" line appears, then restore the default.
+>
+> ```sql
+> SET work_mem = '64kB';   -- run the BEFORE query again
+> RESET work_mem;
+> ```
+
+---
 
 **Step 6 — the write cost, so the trade-off is honest**
 
 > **👁 What to look for across this pair of plans — reading `EXPLAIN` on a write**
 >
-> `EXPLAIN ANALYZE` on an `UPDATE` **actually performs the update**. Run these inside a transaction you roll back if you want to repeat the lab.
+> `EXPLAIN ANALYZE` on an `UPDATE` **actually performs the update**. The block below wraps both statements in a transaction that is rolled back, so the lab can be repeated.
 >
 > Both statements modify 50,000 rows. The first changes a **non-indexed** column; the second writes the same value back to an **indexed** column. Logically the second does nothing at all — yet it is measurably more expensive, and the plan shows why.
 >
@@ -535,15 +740,242 @@ SELECT id, signup_date FROM btree_demo ORDER BY signup_date DESC LIMIT 20;
 > **What is happening underneath:** in the first statement, no indexed column changed, so PostgreSQL can use a **HOT (Heap-Only Tuple)** update — the new row version goes on the same page and **no index is touched**. In the second, `email` is indexed, HOT is disabled, and every index on the table must receive a new entry pointing at the new `ctid`.
 >
 > **The lesson to state out loud:** an index is not a read-only optimization. Indexing a frequently-updated column silently disables HOT and taxes every write to that table, forever. Measure before you add.
+
+```sql
+BEGIN;
+
+-- Update a NON-indexed column: HOT is available, no index maintenance
 EXPLAIN (ANALYZE, BUFFERS, COSTS OFF)
 UPDATE btree_demo SET lifetime_val = lifetime_val + 1 WHERE id BETWEEN 1 AND 50000;
 
--- Time an update that DOES touch an indexed column (every index must be maintained)
+-- Update an INDEXED column: HOT is disabled, every index must be maintained
 EXPLAIN (ANALYZE, BUFFERS, COSTS OFF)
 UPDATE btree_demo SET email = email WHERE id BETWEEN 50001 AND 100000;
+
+ROLLBACK;   -- leaves the table clean so the lab can be re-run
 ```
 
+**Confirm the HOT claim rather than asserting it:**
+
+```sql
+SELECT n_tup_upd, n_tup_hot_upd,
+       round(100.0 * n_tup_hot_upd / NULLIF(n_tup_upd, 0), 1) AS hot_pct
+FROM   pg_stat_user_tables
+WHERE  relname = 'btree_demo';
+```
+
+> Sample this **before** and **after** the two statements above. The first
+> update should push `n_tup_hot_upd` up by close to 50,000; the second should
+> barely move it. That is the HOT mechanism shown as a number rather than
+> described — and it answers the sceptic in the room who suspects the timing
+> difference was noise.
+
 > **Discussion:** the second statement writes the same logical data but must update index entries too. This is HOT being disabled. It is the concrete reason "just add an index" is never free.
+
+---
+
+**Extra A — covering vs. non-covering (`INCLUDE` and the Index Only Scan)**
+
+> **⚠ Run this AFTER Step 6, or drop the covering index before Step 6.** The
+> `INCLUDE` list below puts `lifetime_val` inside an index, and Step 6's "cheap"
+> update targets exactly that column. An included column is stored in the index
+> leaf, so changing it can block HOT — which would quietly invert the Step 6
+> result. Verify with the `n_tup_hot_upd` query in Step 6 if you reorder them.
+
+Step 2's `ix_btree_demo_email` is **non-covering**: it indexes `email` only, so
+any query selecting other columns must visit the heap. That is the `Index Scan`
+you saw in Step 3 — and the reason its buffer count was ~4–6 rather than ~3–5.
+
+```sql
+-- BEFORE: non-covering (this is the Step 2 index, unchanged)
+EXPLAIN (ANALYZE, BUFFERS, COSTS OFF)
+SELECT id, email, last_name, signup_date, lifetime_val
+FROM   btree_demo
+WHERE  email = 'user1750000@example.com';
+
+-- Make it covering
+DROP INDEX ix_btree_demo_email;
+
+CREATE INDEX ix_btree_demo_email_cov
+    ON btree_demo (email)
+    INCLUDE (id, last_name, signup_date, lifetime_val);
+
+VACUUM ANALYZE btree_demo;   -- MANDATORY, see note below
+
+-- AFTER: covering
+EXPLAIN (ANALYZE, BUFFERS, COSTS OFF)
+SELECT id, email, last_name, signup_date, lifetime_val
+FROM   btree_demo
+WHERE  email = 'user1750000@example.com';
+```
+
+> **👁 What to look for**
+>
+> | In the plan | What changed |
+> |---|---|
+> | **`Index Scan` → `Index Only Scan`** | PostgreSQL answered the query **without touching the table at all**. Every selected column now lives inside the index. |
+> | **`Heap Fetches: 0`** | The proof line. Anything above zero means the visibility map is stale — you skipped the `VACUUM`. |
+> | **`Buffers: shared`** | Down by roughly **one** page: the heap page is gone. Modest for a single row — which is the honest point below. |
+>
+> **`VACUUM ANALYZE` is not optional here.** An Index Only Scan can skip the heap
+> only for pages the **visibility map** marks all-visible. On a freshly written
+> table that map is stale, so without the vacuum you get `Heap Fetches: 148000`
+> and the demo appears not to work. This is the single most common way this
+> demonstration fails live.
+
+**Be honest about the size of the win — then show where it is actually large.**
+
+For a one-row lookup, covering saves exactly one page. Nobody should rebuild an
+index for that. The real payoff is **range scans**, where the heap visit happens
+once per row:
+
+```sql
+-- Range query: thousands of rows, all answerable from the index
+EXPLAIN (ANALYZE, BUFFERS, COSTS OFF)
+SELECT email, lifetime_val
+FROM   btree_demo
+WHERE  email BETWEEN 'user1000000@example.com' AND 'user1009999@example.com';
+```
+
+> Run this against both index shapes. With the **non-covering** index PostgreSQL
+> must fetch a heap page per matching row — expect a `Bitmap Heap Scan` or a
+> heap-fetching `Index Scan` with buffers in the thousands. With the **covering**
+> index it stays an `Index Only Scan` with `Heap Fetches: 0` and a fraction of the
+> buffers. *That* ratio is worth a slide.
+>
+> Read the actual row count off the plan rather than quoting one — text ordering
+> is collation-dependent, so the exact match count varies by locale.
+
+**Then price it:**
+
+```sql
+SELECT indexrelname AS index_name,
+       pg_size_pretty(pg_relation_size(indexrelid)) AS index_size,
+       idx_scan AS times_used
+FROM   pg_stat_user_indexes
+WHERE  relname = 'btree_demo'
+ORDER  BY pg_relation_size(indexrelid) DESC;
+```
+
+> The covering index is **substantially larger** than the plain one — it carries
+> four extra columns in every leaf entry. State the trade plainly: you bought heap
+> avoidance with storage, write amplification, and vacuum work. `INCLUDE` requires
+> **PostgreSQL 11+**.
+
+---
+
+**Appendix 3.3-A — why `pg_stat_statements` returns two rows per query**
+
+If you use the `pg_stat_statements` route instead of the plan-capture harness,
+you will see the `baseline` table populate with **2 rows**, and the `'AFTER'`
+select return **2 rows**. That is not a bug in the filter — it is
+`pg_stat_statements` working as designed. Three mechanisms, and you are probably
+hitting the first two together.
+
+**1. The `EXPLAIN` is recorded separately from the query.**
+`pg_stat_statements.track_utility` defaults to **on**, and `EXPLAIN` is a utility
+statement. So you get:
+
+| Entry | Stored `query` text | What its counters measure |
+|---|---|---|
+| The plain execution | `SELECT ... WHERE email = $1` — **normalized**, literal replaced by `$1` | the query |
+| The `EXPLAIN` execution | `EXPLAIN (ANALYZE, BUFFERS, COSTS OFF) SELECT ... WHERE email = 'user1750000@example.com'` — **verbatim**, literal intact | the EXPLAIN wrapper |
+
+Both contain `btree_demo` *and* `email =`, so `ILIKE '%btree_demo%email =%'`
+matches both. Two rows. Worse, they are **not interchangeable**: the EXPLAIN
+entry's timings include planning and instrumentation overhead, so averaging them
+together corrupts the measurement.
+
+**2. Nested statements when `track = all`.**
+If `pg_stat_statements.track` is set to `all` rather than the default `top`,
+statements executed *inside* another statement get their own entry. Your
+`CREATE TEMP TABLE baseline AS SELECT ...` is itself a utility statement wrapping
+a SELECT, so it can produce both a top-level and a nested entry. PostgreSQL 14+
+exposes a **`toplevel`** boolean column precisely so you can tell them apart.
+
+**3. Entries are keyed by `(userid, dbid, queryid)`.**
+The same query text run as two different roles, or in two databases, is two rows.
+Unlikely in a single-session lab, but it bites in shared workshop environments
+where everyone connects to one instance.
+
+**Diagnose it on your box — this shows the real cause in one query:**
+
+```sql
+SELECT queryid,
+       toplevel,                      -- PG14+; drop this column on PG13 and older
+       calls,
+       rows,
+       round(mean_exec_time::numeric, 3) AS mean_ms,
+       left(regexp_replace(query, '\s+', ' ', 'g'), 100) AS query_text
+FROM   pg_stat_statements
+WHERE  query ILIKE '%btree_demo%'
+ORDER  BY calls DESC;
+```
+
+You will see the normalized `$1` entry and the verbatim `EXPLAIN` entry sitting
+next to each other. That output *is* the explanation — show it to the room.
+
+**Fix 1 — tighten the filter (works everywhere):**
+
+```sql
+CREATE TEMP TABLE baseline AS
+SELECT 'BEFORE'::text AS phase, calls, mean_exec_time, rows,
+       shared_blks_hit, shared_blks_read
+FROM   pg_stat_statements
+WHERE  query ILIKE '%btree_demo%email =%'
+  AND  query NOT ILIKE '%pg_stat_statements%'   -- exclude the capture statements
+  AND  query NOT ILIKE 'EXPLAIN%'               -- exclude the EXPLAIN wrapper
+  AND  toplevel;                                -- PG14+; omit on older versions
+```
+
+**Fix 2 — tag the query with a marker comment (cleanest):**
+
+`pg_stat_statements` preserves comments in the normalized text, so a marker gives
+you an exact handle instead of a fuzzy `ILIKE`:
+
+```sql
+SELECT /* idxlab-3.3 */ id, email, last_name, signup_date, lifetime_val
+FROM   btree_demo
+WHERE  email = 'user1750000@example.com';
+```
+
+```sql
+WHERE query LIKE '%idxlab-3.3%'
+  AND query NOT ILIKE 'EXPLAIN%'
+  AND query NOT ILIKE '%pg_stat_statements%'
+```
+
+**Fix 3 — aggregate defensively, so extra entries can never produce extra rows:**
+
+```sql
+SELECT 'BEFORE'::text AS phase,
+       sum(calls)                                   AS calls,
+       sum(total_exec_time) / NULLIF(sum(calls), 0) AS mean_ms,
+       sum(shared_blks_hit)                         AS blks_hit,
+       sum(shared_blks_read)                        AS blks_read
+FROM   pg_stat_statements
+WHERE  query LIKE '%idxlab-3.3%'
+  AND  query NOT ILIKE 'EXPLAIN%'
+  AND  query NOT ILIKE '%pg_stat_statements%';
+```
+
+> **Two operational notes.** `pg_stat_statements.track_utility` can be turned off
+> for the session — but it is `SUSET`, so it needs superuser, which you may not
+> have on a workshop VM. And `pg_stat_statements_reset()` is itself recorded as a
+> statement, so always reset **before** the run you intend to measure, never after.
+>
+> **Recommendation for the workshop:** use the plan-capture harness in Step 1. It
+> has no extension dependency, no `shared_preload_libraries` requirement, no
+> superuser requirement, no normalization ambiguity, and it captures the plan
+> shape — which is the thing this module is actually teaching.
+
+---
+
+> **Teardown**
+>
+> ```sql
+> DROP TABLE IF EXISTS btree_demo;
+> ```
 
 ---
 
