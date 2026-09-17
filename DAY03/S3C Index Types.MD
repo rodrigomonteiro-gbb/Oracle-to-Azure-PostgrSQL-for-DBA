@@ -442,32 +442,6 @@ ANALYZE btree_demo;
 SELECT pg_size_pretty(pg_total_relation_size('btree_demo')) AS table_size;
 ```
 
-> **⚠ Two changes from the naive version of this script — both matter**
->
-> **1. The interval is multiplied, not concatenated.** The original form
-> `((random() * 1500) || ' days')::interval` forces a `double precision` through
-> **text**, and PostgreSQL renders float8 values below `0.0001` in **scientific
-> notation**. When `random()` returns a small enough value the parser receives
-> `'8.42e-05 days'` and the load dies with:
->
-> ```
-> ERROR:  invalid input syntax for type interval: "8.420012751031436e-05 days"
-> SQL state: 22007
-> ```
->
-> The failure is probabilistic, so it passes in rehearsal at 30k rows and fires
-> in front of the room at 3M. `(random() * 1500) * interval '1 day'` never
-> converts to text, so it cannot fail — and it is marginally faster.
->
-> **2. `fillfactor = 90`.** A freshly loaded table is packed to ~100% full, which
-> leaves no room on a page for a new row version. **Step 6's HOT demonstration
-> needs that free space to work** — at the default fillfactor the "cheap" update
-> may not get HOT either, and the contrast collapses. Reserving 10% makes the
-> Step 6 result reliable.
-
-> **Load time:** expect roughly 20–60 seconds for 3M rows. Run it during the
-> previous slide, or pre-load before the session.
-
 ---
 
 **Step 1 — baseline (no index on `email`)**
