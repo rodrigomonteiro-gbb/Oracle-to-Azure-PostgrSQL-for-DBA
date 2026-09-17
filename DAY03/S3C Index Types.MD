@@ -412,9 +412,8 @@ One structural difference worth naming: a SQL Server nonclustered index leaf poi
 **Use case:** the default answer for OLTP selective lookups, foreign keys, range filters, and sort avoidance. **Roughly 90%+ of PostgreSQL indexes in production are B-trees**, and that is correct — reach for an exotic type only when the data type or query shape demands it.
 
 ### 3.3 Demo — the fundamental win
-### 3.3 Demo — the fundamental win
 
-**Setup**
+#### **Setup**
 
 ```sql
 SET search_path TO idxlab, public;
