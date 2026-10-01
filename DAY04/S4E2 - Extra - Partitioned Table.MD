@@ -171,6 +171,32 @@ A query that cannot prune scans **every** partition — with per-partition overh
 | You need a unique constraint that excludes the partition key | ❌ **Blocked** — rethink |
 | "To make it faster" with no other reason | ❌ Index it properly first |
 
+### 4.1 Choosing the partition key
+
+The best partition key matches both the **data lifecycle** and the predicates used by the most important queries.
+
+| Design question | Guidance |
+|---|---|
+| Do retention jobs remove data by date or another natural boundary? | Prefer that boundary so retention becomes `DETACH`/`DROP`, not a large `DELETE` |
+| Do important queries filter on this key directly? | They must, or partition pruning will not help |
+| Will the key distribute rows reasonably evenly? | Avoid a key that creates one huge hot partition and many nearly empty ones |
+| Is more than one column required? | `RANGE` and `HASH` support multi-column keys; `LIST` accepts only one column or expression |
+| Can the key be `NULL`? | For `RANGE`, use a `DEFAULT` partition or reject `NULL`; for `LIST`, route it explicitly with `FOR VALUES IN (NULL)` or use `DEFAULT` |
+| Is a primary key or unique constraint required? | It must include **every partition-key column**, and partition-key expressions cannot be covered by a parent-level unique constraint |
+
+> **Keep predicates simple.** Partitioning on `event_at` works best with predicates directly on `event_at`. Wrapping the key in a function or forcing a mismatched cast can prevent pruning because the planner can no longer match the predicate to the partition bounds.
+
+### 4.2 Partitioning is not sharding
+
+| | **Partitioning** | **Sharding** |
+|---|---|---|
+| What is split? | One logical table into physical child tables | One dataset across multiple PostgreSQL servers or nodes |
+| Key controls | Which partition stores the row | Which server or node stores the row |
+| Main goals | Lifecycle management, pruning, smaller maintenance units | Horizontal scale beyond one server |
+| Native example | PostgreSQL declarative partitioning | Azure Database for PostgreSQL Elastic Clusters |
+
+The techniques are complementary: a sharded table can still be partitioned inside each shard. That creates two independent design decisions — choose a **distribution key** for placement across servers and a **partition key** for pruning and lifecycle management within each server.
+
 ---
 
 # PART II — Creating partitions
@@ -626,6 +652,25 @@ ALTER TABLE sales ADD CONSTRAINT uq_sales_cust_date UNIQUE (customer_id, order_d
 ```
 
 > **This enforces uniqueness only within the combination** — the same `customer_id` can appear on many dates, across many partitions. **There is no way to enforce global uniqueness on a non-partition-key column.** If the data model requires it, either make that column the partition key, or do not partition.
+
+### 8.5 Foreign keys and CHECK constraints
+
+PostgreSQL 12+ allows foreign keys **from and to partitioned tables**. The normal uniqueness rule still applies: a referenced primary key or unique constraint on a partitioned parent must include every partition-key column.
+
+```sql
+CREATE TABLE sale_items (
+    sale_id     bigint NOT NULL,
+    order_date  date   NOT NULL,
+    line_no     int    NOT NULL,
+    PRIMARY KEY (sale_id, order_date, line_no),
+    FOREIGN KEY (sale_id, order_date)
+        REFERENCES sales (sale_id, order_date)
+);
+```
+
+> **Do not replace supported foreign keys with triggers or application-only validation.** That advice applies to obsolete PostgreSQL releases, not current Azure Database for PostgreSQL versions.
+
+Declarative partition pruning uses the partition bounds stored in PostgreSQL's catalogs; you do not need to duplicate those bounds with a `CHECK` constraint. A matching `CHECK` constraint is still operationally useful when attaching a preloaded table because it lets PostgreSQL prove the rows fit without scanning the whole table (§12.1).
 
 ---
 
@@ -1275,5 +1320,6 @@ DROP SCHEMA partlab CASCADE;
 - Explicit locking — https://www.postgresql.org/docs/current/explicit-locking.html
 - Routine vacuuming — https://www.postgresql.org/docs/current/routine-vacuuming.html
 - Planner statistics — https://www.postgresql.org/docs/current/planner-stats.html
+- Azure Database for PostgreSQL: enable and use `pg_partman` — https://learn.microsoft.com/azure/postgresql/configure-maintain/how-to-use-pg-partman
 - `pg_partman` — https://github.com/pgpartman/pg_partman
 - Azure — extensions — https://learn.microsoft.com/en-us/azure/postgresql/extensions/concepts-extensions
