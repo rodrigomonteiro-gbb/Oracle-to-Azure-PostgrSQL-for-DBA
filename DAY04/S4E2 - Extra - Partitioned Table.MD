@@ -7,7 +7,7 @@
 ## 0. The 60-second summary
 
 | Question | Answer |
-|---|---|
+| --- | --- |
 | **What is a partitioned table in PostgreSQL?** | A **logical parent that holds no data**, plus a set of **real child tables** that hold all of it |
 | **Which methods?** | **RANGE**, **LIST**, **HASH** — and they can be nested (sub-partitioning) |
 | **Are partitions separate tables?** | ✅ **Yes** — each has its own files, own indexes, own statistics, own vacuum cycle |
@@ -19,9 +19,9 @@
 
 > ⚠️ Partitioning is a **data-management** feature that sometimes helps performance — not a performance feature that sometimes helps management. Teams that partition purely "to make it faster" are usually disappointed.
 
----
-
 # PART I — Concepts
+
+</br>
 
 ## 1. What partitioning is
 
@@ -42,7 +42,7 @@
 ### 1.1 The three methods
 
 | Method | Splits by | Classic use |
-|---|---|---|
+| --- | --- | --- |
 | **RANGE** | A continuous range of values | Dates, timestamps, sequential IDs — **by far the most common** |
 | **LIST** | An explicit set of discrete values | Region, country, tenant, status |
 | **HASH** | A hash of the key, modulo N | Even distribution when there is no natural range or list |
@@ -54,6 +54,7 @@
 > ⚠️ **The old way still exists, and you will meet it.** Before PG 10, partitioning was done with **table inheritance plus CHECK constraints plus routing triggers**. It works, it is still supported, and it is **worse in every respect**: manual routing, `constraint_exclusion` instead of true pruning, no `ATTACH`/`DETACH`, no partition-wise joins.
 >
 > **If you inherit an inheritance-based scheme, migrating it to declarative partitioning is almost always worth the effort.** Detect it with:
+>
 > ```sql
 > SELECT inhrelid::regclass AS child, inhparent::regclass AS parent
 > FROM pg_inherits
@@ -87,7 +88,7 @@ The planner skips partitions that cannot contain matching rows. A query for one 
 ### ✅ 2.3 Smaller, faster maintenance units
 
 | Operation | Unpartitioned 2 TB table | Partitioned into 24 × 85 GB |
-|---|---|---|
+| --- | --- | --- |
 | `VACUUM` | One enormous job | 24 independent jobs, parallelizable, each finishing |
 | `REINDEX` | Hours, huge temp space | Per-partition, schedulable |
 | `ANALYZE` | Samples 2 TB | Samples per partition — **better statistics** |
@@ -137,7 +138,7 @@ PARTITION BY RANGE (tenant);
 Every partition is a relation the planner must consider and lock. Hundreds are fine; **thousands hurt**, especially for short OLTP queries where planning time rivals execution time.
 
 | Partition count | Practical assessment |
-|---|---|
+| --- | --- |
 | **< 100** | Comfortable |
 | **100–1,000** | Fine with good pruning; watch planning time |
 | **1,000–10,000** | Possible; expect measurable planning overhead |
@@ -161,7 +162,7 @@ A query that cannot prune scans **every** partition — with per-partition overh
 ## 4. Should you partition? — the decision test
 
 | Signal | Partition? |
-|---|---|
+| --- | --- |
 | Table > ~100 GB **and** growing | ✅ Strong candidate |
 | You regularly delete/archive old data in bulk | ✅ **Best reason there is** |
 | Almost every query filters on one natural key (date, tenant) | ✅ Yes — that is the partition key |
@@ -176,7 +177,7 @@ A query that cannot prune scans **every** partition — with per-partition overh
 The best partition key matches both the **data lifecycle** and the predicates used by the most important queries.
 
 | Design question | Guidance |
-|---|---|
+| --- | --- |
 | Do retention jobs remove data by date or another natural boundary? | Prefer that boundary so retention becomes `DETACH`/`DROP`, not a large `DELETE` |
 | Do important queries filter on this key directly? | They must, or partition pruning will not help |
 | Will the key distribute rows reasonably evenly? | Avoid a key that creates one huge hot partition and many nearly empty ones |
@@ -189,7 +190,7 @@ The best partition key matches both the **data lifecycle** and the predicates us
 ### 4.2 Partitioning is not sharding
 
 | | **Partitioning** | **Sharding** |
-|---|---|---|
+| --- | --- | --- |
 | What is split? | One logical table into physical child tables | One dataset across multiple PostgreSQL servers or nodes |
 | Key controls | Which partition stores the row | Which server or node stores the row |
 | Main goals | Lifecycle management, pruning, smaller maintenance units | Horizontal scale beyond one server |
@@ -431,14 +432,14 @@ ANALYZE salesorderdetail;
 **You cannot convert a table in place.** `ALTER TABLE ... PARTITION BY` does not exist. Your options:
 
 | Method | Downtime | Disk needed | Complexity |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | **A — Create new + copy + rename** | Minutes to hours (write outage) | **2× table size** | Low |
 | **B — Create new + `ATTACH` the old table as one partition** | **Seconds** | Minimal | Medium |
 | **C — Online with logical replication / `pg_partman`** | Near-zero | 2× | High |
 
 > **The cost everyone underestimates is disk.** Methods A and C need a full second copy of the table *plus its indexes* simultaneously. On a 2 TB table that is 4 TB of free space. **Verify before you start** — running out of space mid-copy leaves you with a mess.
 
-### 7.3 Method A — copy into a new partitioned table
+#### 7.2.1 Method A — copy into a new partitioned table
 
 ```sql
 -- 1. Build the partitioned shell
@@ -479,37 +480,88 @@ COMMIT;
 
 > **Sequence of operations matters enormously.** Load first, index second. Loading 12 million rows into a table that already has two indexes is several times slower than loading then indexing, because every insert maintains both index trees.
 
-### 7.4 Method B — attach the existing table as a partition *(minimal downtime)*
+#### 7.2.2 Method B — attach the existing table as a partition *(minimal downtime)*
 
 The trick for large tables: keep the historical data exactly where it is.
 
 ```sql
-DROP TABLE IF EXISTS sod_live CASCADE;
+-- Remove only an empty parent left by a failed attempt. Refuse to continue if
+-- any partition is already attached, because dropping the tree risks data loss.
+DO $$
+BEGIN
+    IF to_regclass('partlab.sod_live') IS NOT NULL THEN
+        IF EXISTS (
+            SELECT 1
+            FROM pg_inherits
+            WHERE inhparent = 'partlab.sod_live'::regclass
+        ) THEN
+            RAISE EXCEPTION
+                'partlab.sod_live already has attached partitions; stop and inspect it';
+        END IF;
 
--- 1. New partitioned parent
-CREATE TABLE sod_live (LIKE salesorderdetail_old INCLUDING DEFAULTS)
+        DROP TABLE partlab.sod_live;
+    END IF;
+END $$;
+
+-- 1. New partitioned parent. The parent owns the identity definition and
+--    receives a new sequence; partitions cannot own identity definitions.
+CREATE TABLE partlab.sod_live (
+    LIKE partlab.salesorderdetail_old INCLUDING DEFAULTS INCLUDING IDENTITY
+)
 PARTITION BY RANGE (orderdate);
 
 -- 2. CRITICAL: add a CHECK constraint matching the future partition bound.
 --    Without it, ATTACH must scan the whole table to prove every row fits.
 --    With it, PostgreSQL trusts the constraint and ATTACH is nearly instant.
-ALTER TABLE salesorderdetail_old
-    ADD CONSTRAINT ck_sod_hist
-    CHECK (orderdate >= DATE '2022-01-01' AND orderdate < DATE '2025-01-01')
-    NOT VALID;
+--    The catalog check makes this step safe to repeat after a failed ATTACH.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conrelid = 'partlab.salesorderdetail_old'::regclass
+          AND conname = 'ck_sod_hist'
+    ) THEN
+        ALTER TABLE partlab.salesorderdetail_old
+            ADD CONSTRAINT ck_sod_hist
+            CHECK (orderdate >= DATE '2022-01-01'
+               AND orderdate <  DATE '2025-01-01')
+            NOT VALID;
+    END IF;
+END $$;
 
-ALTER TABLE salesorderdetail_old VALIDATE CONSTRAINT ck_sod_hist;  -- weak lock
+ALTER TABLE partlab.salesorderdetail_old
+    VALIDATE CONSTRAINT ck_sod_hist;  -- no rescan if already valid
 
--- 3. Attach. Fast, because the CHECK already proves the bound.
-ALTER TABLE sod_live ATTACH PARTITION salesorderdetail_old
+-- 3. The standalone table still owns its original identity definition.
+--    A partition must inherit identity behavior from its partitioned parent
+--    and may not retain an identity definition of its own.
+ALTER TABLE partlab.salesorderdetail_old
+    ALTER COLUMN salesorderdetailid DROP IDENTITY IF EXISTS;
+
+-- 4. Attach. Fast, because the CHECK already proves the bound.
+ALTER TABLE partlab.sod_live
+    ATTACH PARTITION partlab.salesorderdetail_old
     FOR VALUES FROM ('2022-01-01') TO ('2025-01-01');
 
--- 4. Add forward partitions for new data
-CREATE TABLE sod_live_2025_q1 PARTITION OF sod_live
+-- 5. Advance the new parent identity sequence beyond the historical IDs.
+SELECT setval(
+    pg_get_serial_sequence('partlab.sod_live', 'salesorderdetailid'),
+    GREATEST(COALESCE(max_id, 1), 1),
+    max_id IS NOT NULL
+)
+FROM (
+    SELECT max(salesorderdetailid) AS max_id
+    FROM partlab.sod_live
+) AS existing_ids;
+
+-- 6. Add forward partitions for new data
+CREATE TABLE partlab.sod_live_2025_q1 PARTITION OF partlab.sod_live
     FOR VALUES FROM ('2025-01-01') TO ('2025-04-01');
 
--- 5. The redundant CHECK can now be dropped
-ALTER TABLE salesorderdetail_old DROP CONSTRAINT ck_sod_hist;
+-- 7. The redundant CHECK can now be dropped
+ALTER TABLE partlab.salesorderdetail_old
+    DROP CONSTRAINT ck_sod_hist;
 ```
 
 > **👁 What to observe — time both variants**
@@ -521,16 +573,93 @@ ALTER TABLE salesorderdetail_old DROP CONSTRAINT ck_sod_hist;
 >
 > **This is the single most valuable technique in this document for migrating a large live table.**
 
-### 7.5 `pg_partman` — automated partition lifecycle
+#### 7.2.3 `pg_partman` — automated partition lifecycle
 
-Manual `DO` blocks do not scale operationally. `pg_partman` creates partitions ahead of time and retires old ones on a schedule.
+#### What `pg_partman` provides
+
+`pg_partman` is a PostgreSQL extension that **manages native range-partitioned tables**. It does not replace declarative partitioning: PostgreSQL still routes rows, enforces partition bounds, and performs pruning. The extension supplies the lifecycle automation that PostgreSQL intentionally leaves to the DBA.
+
+| Capability | What `pg_partman` does |
+| --- | --- |
+| **Register a partition set** | `create_parent()` records an existing declaratively partitioned parent in `part_config` |
+| **Create partitions ahead of demand** | `premake` controls how many future partitions are kept ready, preventing inserts from failing at a missing boundary |
+| **Apply a consistent interval** | Manages time- or integer-based ranges such as hourly, daily, monthly, or fixed-ID intervals |
+| **Run recurring maintenance** | `run_maintenance()` creates future partitions and applies retention rules for registered parents |
+| **Enforce retention** | Old partitions can be detached or dropped according to `retention` and the related `retention_keep_*` settings |
+| **Continue time-based creation during quiet periods** | `infinite_time_partitions` allows future time partitions to be created even when no recent rows advance the observed data boundary |
+| **Centralize configuration** | `part_config` exposes the interval, premake count, maintenance status, retention policy, and other settings for monitoring and automation |
+| **Support scheduling** | Maintenance can run through `pg_partman_bgw`, `pg_cron`, or an external scheduler |
+
+The normal operating cycle is:
+
+1. Create a native `PARTITION BY RANGE` parent and any historical partitions that must already exist.
+2. Call `create_parent()` once to register that parent with `pg_partman`.
+3. Configure `premake`, retention, and other policies in `part_config`.
+4. Schedule `run_maintenance()` frequently enough to create the next partition before it is needed.
+5. Monitor both `part_config` and the actual partition bounds; automation still requires alerting.
+
+> **What `pg_partman` does not do**
+>
+> - It does not choose the correct partition key or interval for you.
+> - It does not provide global indexes or bypass PostgreSQL's uniqueness rules.
+> - It does not shard data across servers.
+> - It does not make an arbitrary existing table partitioned in place; the native partitioned parent must already exist.
+> - It does not run maintenance merely because the extension is installed. Configure `pg_partman_bgw`, schedule `run_maintenance()` with `pg_cron`, or invoke it from an external job.
+
+> **Azure operational requirements:** allow `pg_partman` in the `azure.extensions` server parameter before running `CREATE EXTENSION`. If you use the background worker, also configure `pg_partman_bgw` in `shared_preload_libraries` and restart the server when the parameter change requires it. A `pg_cron` or external job is often simpler because the schedule is explicit and observable.
+
+Useful configuration checks:
+
+```sql
+-- Where are the extension objects installed, and which version is active?
+SELECT e.extversion,
+       n.nspname AS extension_schema
+FROM pg_extension e
+JOIN pg_namespace n ON n.oid = e.extnamespace
+WHERE e.extname = 'pg_partman';
+
+-- Run after placing the extension schema in search_path, as shown in 7.5.2.
+SELECT parent_table,
+       partition_interval,
+       premake,
+       automatic_maintenance,
+       retention,
+       retention_keep_table,
+       infinite_time_partitions
+FROM part_config
+ORDER BY parent_table;
+```
+
+#### 7.2.4 Method C -  `pg_partman`
+
+Manual `DO` blocks do not scale operationally. This example registers the partitioned table created in §7.4, keeps four future monthly partitions ready, and configures a 24-month retention policy.
 
 ```sql
 -- On Azure Flexible Server: add PG_PARTMAN (and PG_CRON for scheduling) to the
 -- azure.extensions server parameter first, then create them here.
 CREATE EXTENSION IF NOT EXISTS pg_partman;
 
-SELECT partman.create_parent(
+-- pg_partman objects are commonly installed in public on Azure, not in a
+-- schema named partman. Discover the extension schema instead of assuming it.
+SELECT e.extversion,
+       n.nspname AS extension_schema
+FROM pg_extension e
+JOIN pg_namespace n ON n.oid = e.extnamespace
+WHERE e.extname = 'pg_partman';
+
+-- Put the actual extension schema first for the rest of this session. This
+-- makes the example work whether pg_partman is in public, partman, or another
+-- allowed schema.
+SELECT set_config(
+    'search_path',
+    quote_ident(n.nspname) || ', partlab, public',
+    false
+) AS effective_search_path
+FROM pg_extension e
+JOIN pg_namespace n ON n.oid = e.extnamespace
+WHERE e.extname = 'pg_partman';
+
+SELECT create_parent(
     p_parent_table => 'partlab.sod_live',
     p_control      => 'orderdate',
     p_interval     => '1 month',
@@ -538,13 +667,16 @@ SELECT partman.create_parent(
 );
 
 -- Retention: drop partitions older than 24 months
-UPDATE partman.part_config
+UPDATE part_config
 SET retention = '24 months',
     retention_keep_table = false
 WHERE parent_table = 'partlab.sod_live';
 
 -- Run maintenance (schedule with pg_cron)
-SELECT partman.run_maintenance();
+SELECT run_maintenance();
+
+-- Restore the workshop search path after the extension calls.
+SET search_path TO partlab, public;
 ```
 
 ---
@@ -597,16 +729,38 @@ ORDER BY tablename, indexname;
 **Why you would do this:**
 
 | Scenario | Strategy |
-|---|---|
+| --- | --- |
 | Hot current partition, cold history | Rich indexing on current; minimal on archive |
 | Different query patterns by era | Index each partition for how it is actually queried |
-| Reduce storage on archive data | Drop non-essential indexes from old partitions |
+| Reduce storage on archive data | Create independent local indexes only on hot partitions; parent-managed indexes cannot be removed from selected children |
 | Load a new partition fast | Load unindexed, index afterwards, then attach |
 
+There are two different kinds of child indexes, and the distinction determines whether they can be dropped independently:
+
+1. **Independent local index:** created directly on one partition, such as `ix_sales_q4_region`. It can be dropped normally.
+2. **Attached child index:** created by a parent partitioned index, such as the Q1 child of `ix_sales_customer`. It is a required dependency of the parent and **cannot be dropped by itself**.
+
 ```sql
--- Reclaim space by dropping indexes from cold partitions
-DROP INDEX IF EXISTS sales_2024_q1_customer_id_idx;
+-- Supported: this index was created directly on one partition and is independent.
+DROP INDEX IF EXISTS partlab.ix_sales_q4_region;
+
+-- Not supported:
+-- DROP INDEX partlab.sales_2024_q1_customer_id_idx;
+-- ERROR: cannot drop ... because index ix_sales_customer requires it
 ```
+
+To change an existing parent-managed index into a hot-partition-only strategy, drop the **parent index** and then create independent indexes only where they are needed:
+
+```sql
+-- Drops the metadata-only parent and every attached customer_id child index.
+DROP INDEX partlab.ix_sales_customer;
+
+-- Recreate customer_id coverage only on the hot partition.
+CREATE INDEX ix_sales_q4_customer_hot
+    ON partlab.sales_2024_q4 (customer_id);
+```
+
+> ⚠️ Dropping the parent index removes its child indexes from **every partition**. Do this only after confirming that historical queries do not require them. PostgreSQL supports `ATTACH PARTITION` for indexes, but it has no corresponding index-detach operation.
 
 > ⚠️ **The trade-off:** a query without partition pruning that relies on that index will be fast on some partitions and slow on others. **Asymmetric indexing demands that pruning works.**
 
@@ -619,13 +773,60 @@ DROP INDEX IF EXISTS sales_2024_q1_customer_id_idx;
 CREATE INDEX ix_sales_amount ON ONLY sales (amount);
 -- The parent index is marked INVALID until every partition has one attached
 
--- 2. Build each partition's index CONCURRENTLY -- no write blocking
-CREATE INDEX CONCURRENTLY ix_sales_q1_amount ON sales_2024_q1 (amount);
-CREATE INDEX CONCURRENTLY ix_sales_q2_amount ON sales_2024_q2 (amount);
-CREATE INDEX CONCURRENTLY ix_sales_q3_amount ON sales_2024_q3 (amount);
-CREATE INDEX CONCURRENTLY ix_sales_q4_amount ON sales_2024_q4 (amount);
-CREATE INDEX CONCURRENTLY ix_sales_def_amount ON sales_default (amount);
+-- Show the parent index state. Run this again after each ATTACH below:
+-- attached_child_indexes increases, and status changes to VALID only when
+-- every table partition has a matching attached index.
+SELECT i.indexrelid::regclass AS parent_index,
+       i.indisvalid,
+       i.indisready,
+       count(ci.inhrelid) AS attached_child_indexes,
+       (
+           SELECT count(*)
+           FROM pg_inherits ti
+           WHERE ti.inhparent = 'partlab.sales'::regclass
+       ) AS required_child_indexes,
+       CASE
+           WHEN i.indisvalid THEN 'VALID'
+           ELSE 'INVALID - missing child indexes'
+       END AS status
+FROM pg_index i
+LEFT JOIN pg_inherits ci ON ci.inhparent = i.indexrelid
+WHERE i.indexrelid = 'partlab.ix_sales_amount'::regclass
+GROUP BY i.indexrelid, i.indisvalid, i.indisready;
+```
 
+**Execution requirement for step 2:** `CREATE INDEX CONCURRENTLY` cannot run inside either an explicit transaction or the implicit transaction created when several commands are submitted as one batch.
+
+1. In pgAdmin Query Tool, make sure **Auto-commit is on**.
+2. If you previously issued `BEGIN`, run `ROLLBACK;` separately first.
+3. Run **each of the following five code blocks separately**. Do not select and execute all five statements together.
+
+```sql
+-- 2a. Run by itself
+CREATE INDEX CONCURRENTLY ix_sales_q1_amount ON sales_2024_q1 (amount);
+```
+
+```sql
+-- 2b. Run by itself
+CREATE INDEX CONCURRENTLY ix_sales_q2_amount ON sales_2024_q2 (amount);
+```
+
+```sql
+-- 2c. Run by itself
+CREATE INDEX CONCURRENTLY ix_sales_q3_amount ON sales_2024_q3 (amount);
+```
+
+```sql
+-- 2d. Run by itself
+CREATE INDEX CONCURRENTLY ix_sales_q4_amount ON sales_2024_q4 (amount);
+```
+
+```sql
+-- 2e. Run by itself
+CREATE INDEX CONCURRENTLY ix_sales_def_amount ON sales_default (amount);
+```
+
+```sql
 -- 3. Attach each one to the parent
 ALTER INDEX ix_sales_amount ATTACH PARTITION ix_sales_q1_amount;
 ALTER INDEX ix_sales_amount ATTACH PARTITION ix_sales_q2_amount;
@@ -633,10 +834,27 @@ ALTER INDEX ix_sales_amount ATTACH PARTITION ix_sales_q3_amount;
 ALTER INDEX ix_sales_amount ATTACH PARTITION ix_sales_q4_amount;
 ALTER INDEX ix_sales_amount ATTACH PARTITION ix_sales_def_amount;
 
--- 4. Once ALL partitions are attached, the parent index becomes valid
-SELECT indexrelid::regclass AS index_name, indisvalid
-FROM pg_index WHERE indexrelid = 'ix_sales_amount'::regclass;
+-- 4. Once ALL partitions are attached, confirm that the parent is valid
+SELECT i.indexrelid::regclass AS parent_index,
+       i.indisvalid,
+       i.indisready,
+       count(ci.inhrelid) AS attached_child_indexes,
+       CASE WHEN i.indisvalid THEN 'VALID' ELSE 'INVALID' END AS status
+FROM pg_index i
+LEFT JOIN pg_inherits ci ON ci.inhparent = i.indexrelid
+WHERE i.indexrelid = 'partlab.ix_sales_amount'::regclass
+GROUP BY i.indexrelid, i.indisvalid, i.indisready;
 ```
+
+> **Lab fallback:** if your SQL client cannot execute with autocommit enabled, remove `CONCURRENTLY` and run ordinary `CREATE INDEX` statements instead. They produce compatible indexes for `ATTACH PARTITION`, but each build takes a stronger lock and can block writes to that partition.
+
+| Status column | Interpretation |
+| --- | --- |
+| `indisvalid = false` | The partitioned index is incomplete and cannot represent all table partitions |
+| `indisvalid = true` | Every table partition has a matching attached child index |
+| `indisready = true` | The index is ready to receive changes; this does **not** mean the partitioned index is complete |
+| `attached_child_indexes` | Number of physical indexes already attached to the metadata-only parent index |
+| `required_child_indexes` | Number of direct table partitions that need matching indexes |
 
 > ⚠️ **`CREATE INDEX CONCURRENTLY` is not supported directly on a partitioned parent.** The `ON ONLY` + per-partition + `ATTACH` sequence above is the supported workaround, and it is the standard production technique.
 
@@ -676,6 +894,8 @@ Declarative partition pruning uses the partition bounds stored in PostgreSQL's c
 
 # PART IV — Querying partitioned tables
 
+> **Table name used from this point forward:** Method A renamed the partitioned parent from `sod_part` to `partlab.salesorderdetail` during the swap in §7.3. PostgreSQL does not rename its child tables automatically, so physical partitions still have names such as `sod_part_2023_q2`. The Method B parent, `partlab.sod_live`, is a separate alternative demonstrated in §§7.4–7.5.
+
 ## 9. Partition pruning — the whole point
 
 ### 9.1 Plan-time pruning
@@ -685,7 +905,7 @@ Declarative partition pruning uses the partition bounds stored in PostgreSQL's c
 > **In the text plan (`EXPLAIN ANALYZE`):**
 >
 > | What to look for | Meaning |
-> |---|---|
+> | --- | --- |
 > | **`Append`** node | The partition dispatcher. Its **children are the partitions actually scanned.** |
 > | **Count the child nodes** | 1 child out of 12 partitions = pruning worked. 12 children = **no pruning — investigate.** |
 > | **Child node names** | They are the **partition names** (`sod_part_2023_q2`). Read them to confirm the *right* ones were chosen. |
@@ -697,7 +917,7 @@ Declarative partition pruning uses the partition bounds stored in PostgreSQL's c
 > **In a graphical plan (pgAdmin / VS Code PostgreSQL extension / explain.dalibo.com):**
 >
 > | What to look at | Meaning |
-> |---|---|
+> | --- | --- |
 > | **Number of boxes feeding the `Append` node** | The visual partition count — the fastest possible pruning check |
 > | **Arrow thickness** into `Append` | Row volume per partition; one thick arrow and many hairlines = good skew-aware pruning |
 > | **Node colour/heat** | Most tools shade the most expensive node — if a partition scan is the hotspot, that partition needs an index |
@@ -710,14 +930,14 @@ SET search_path TO partlab, public;
 -- ✅ GOOD: filters on the partition key -- prunes to one partition
 EXPLAIN (ANALYZE, BUFFERS, COSTS OFF)
 SELECT count(*), sum(linetotal)
-FROM sod_part
+FROM partlab.salesorderdetail
 WHERE orderdate >= DATE '2023-04-01' AND orderdate < DATE '2023-07-01';
 ```
 
 ```sql
 -- ❌ BAD: no partition key predicate -- scans EVERY partition
 EXPLAIN (ANALYZE, BUFFERS, COSTS OFF)
-SELECT count(*) FROM sod_part WHERE productid = 870;
+SELECT count(*) FROM partlab.salesorderdetail WHERE productid = 870;
 ```
 
 > **👁 Compare these two plans side by side — this is the core demonstration**
@@ -727,12 +947,13 @@ SELECT count(*) FROM sod_part WHERE productid = 870;
 ```sql
 -- ⚠️ The subtle trap: a function on the partition key defeats plan-time pruning
 EXPLAIN (COSTS OFF)
-SELECT count(*) FROM sod_part WHERE extract(year FROM orderdate) = 2023;
+SELECT count(*) FROM partlab.salesorderdetail
+WHERE extract(year FROM orderdate) = 2023;
 -- Scans everything.
 
 -- The rewrite that prunes:
 EXPLAIN (COSTS OFF)
-SELECT count(*) FROM sod_part
+SELECT count(*) FROM partlab.salesorderdetail
 WHERE orderdate >= DATE '2023-01-01' AND orderdate < DATE '2024-01-01';
 ```
 
@@ -742,7 +963,8 @@ When the value is not known at plan time — a parameter, or a join key — Post
 
 ```sql
 PREPARE q(date, date) AS
-SELECT count(*) FROM sod_part WHERE orderdate >= $1 AND orderdate < $2;
+SELECT count(*) FROM partlab.salesorderdetail
+WHERE orderdate >= $1 AND orderdate < $2;
 
 EXPLAIN (ANALYZE, COSTS OFF)
 EXECUTE q(DATE '2023-04-01', DATE '2023-07-01');
@@ -763,20 +985,20 @@ EXECUTE q(DATE '2023-04-01', DATE '2023-07-01');
 SELECT count(*) FROM sod_part_2023_q2;
 
 -- ONLY restricts to the parent alone (which holds no rows)
-SELECT count(*) FROM ONLY sod_part;      -- always 0
+SELECT count(*) FROM ONLY partlab.salesorderdetail;      -- always 0
 ```
 
 ```sql
 -- Which partition does each row live in?
 SELECT tableoid::regclass AS partition, count(*)
-FROM sod_part
+FROM partlab.salesorderdetail
 GROUP BY 1
 ORDER BY 1;
 ```
 
 ```sql
 -- Filter by partition using tableoid
-SELECT * FROM sod_part
+SELECT * FROM partlab.salesorderdetail
 WHERE tableoid = 'sod_part_2023_q2'::regclass
 LIMIT 10;
 ```
@@ -794,7 +1016,7 @@ SELECT c.relname                                   AS partition,
        pg_size_pretty(pg_total_relation_size(c.oid)) AS total
 FROM pg_class c
 JOIN pg_inherits i ON i.inhrelid = c.oid
-WHERE i.inhparent = 'sod_part'::regclass
+WHERE i.inhparent = 'partlab.salesorderdetail'::regclass
 ORDER BY c.relname;
 ```
 
@@ -827,7 +1049,7 @@ SET enable_partitionwise_aggregate = on;
 
 ```sql
 -- Vacuums EVERY partition (the parent itself has nothing to vacuum)
-VACUUM (VERBOSE, ANALYZE) sod_part;
+VACUUM (VERBOSE, ANALYZE) partlab.salesorderdetail;
 
 -- Vacuum one partition only -- the normal maintenance unit
 VACUUM (VERBOSE, ANALYZE) sod_part_2023_q2;
@@ -836,6 +1058,7 @@ VACUUM (VERBOSE, ANALYZE) sod_part_2023_q2;
 > **👁 What to look for in the `VERBOSE` output**
 >
 > Vacuuming the parent produces a **separate block of output per partition**:
+>
 > ```
 > INFO:  vacuuming "partlab.sod_part_2022_q1"
 > INFO:  scanned index "sod_part_2022_q1_orderdate_idx" to remove N row versions
@@ -843,6 +1066,7 @@ VACUUM (VERBOSE, ANALYZE) sod_part_2023_q2;
 > INFO:  vacuuming "partlab.sod_part_2022_q2"
 > ...
 > ```
+>
 > **Each partition is vacuumed serially, with its own index phase.** This is exactly why partitioning helps maintenance: you can vacuum one 85 GB partition in a window instead of one 2 TB table, and you can run several in parallel from separate sessions.
 
 ### 10.2 Autovacuum treats partitions individually
@@ -854,7 +1078,8 @@ SELECT relname,
        round(100.0 * n_dead_tup / NULLIF(n_live_tup + n_dead_tup, 0), 1) AS dead_pct,
        last_vacuum, last_autovacuum, last_analyze, last_autoanalyze
 FROM pg_stat_user_tables
-WHERE schemaname = 'partlab' AND relname LIKE 'sod_part%'
+WHERE schemaname = 'partlab'
+  AND (relname = 'salesorderdetail' OR relname LIKE 'sod_part_%')
 ORDER BY relname;
 ```
 
@@ -915,21 +1140,21 @@ JOIN pg_stat_activity a USING (pid);
 ### 11.1 Two levels of statistics
 
 | Level | Used for | Maintained by autovacuum? |
-|---|---|---|
+| --- | --- | --- |
 | **Per-partition** | Estimating within a partition after pruning | ✅ **Yes** |
 | **Parent (inheritance) statistics** | Estimating across partitions, join planning, `GROUP BY` | ❌ **NO** |
 
 ### 11.2 Demo — see both levels
 
 ```sql
-ANALYZE sod_part;   -- gathers BOTH parent-level and per-partition statistics
+ANALYZE partlab.salesorderdetail;   -- gathers parent and partition statistics
 ```
 
 ```sql
 -- Parent-level: inherited = true
 SELECT tablename, attname, n_distinct, correlation, inherited
 FROM pg_stats
-WHERE schemaname = 'partlab' AND tablename = 'sod_part'
+WHERE schemaname = 'partlab' AND tablename = 'salesorderdetail'
   AND attname IN ('orderdate','productid')
 ORDER BY attname, inherited;
 
@@ -949,11 +1174,13 @@ ORDER BY attname;
 -- Proof: the parent never shows an autoanalyze timestamp
 SELECT relname, last_analyze, last_autoanalyze, n_mod_since_analyze
 FROM pg_stat_user_tables
-WHERE schemaname = 'partlab' AND relname LIKE 'sod_part%'
+WHERE schemaname = 'partlab'
+  AND (relname = 'salesorderdetail' OR relname LIKE 'sod_part_%')
 ORDER BY relname;
 ```
 
 > **Consequences of stale parent statistics:**
+>
 > - Bad row estimates for queries spanning partitions
 > - Poor join order when the partitioned table joins to others
 > - Wrong `GROUP BY` and aggregate strategies
@@ -964,7 +1191,7 @@ ORDER BY relname;
 
 ```sql
 -- Add to your maintenance job. This is NOT optional on a partitioned schema.
-ANALYZE sod_part;
+ANALYZE partlab.salesorderdetail;
 ```
 
 ```sql
@@ -995,8 +1222,9 @@ ALTER TABLE sod_part_2023_q2 ALTER COLUMN productid SET STATISTICS 500;
 ANALYZE sod_part_2023_q2;
 
 -- On the parent -- inherited by future partitions
-ALTER TABLE sod_part ALTER COLUMN productid SET STATISTICS 500;
-ANALYZE sod_part;
+ALTER TABLE partlab.salesorderdetail
+    ALTER COLUMN productid SET STATISTICS 500;
+ANALYZE partlab.salesorderdetail;
 ```
 
 > ⚠️ **Extended statistics (`CREATE STATISTICS`) must be created per partition.** They are **not** inherited from the parent. If correlated columns matter, script their creation into your partition-creation routine.
@@ -1006,7 +1234,7 @@ ANALYZE sod_part;
 ### 12.1 Adding a partition
 
 ```sql
-CREATE TABLE sod_part_2025_q1 PARTITION OF sod_part
+CREATE TABLE sod_part_2025_q1 PARTITION OF partlab.salesorderdetail
     FOR VALUES FROM ('2025-01-01') TO ('2025-04-01');
 -- Inherits every parent index automatically
 ```
@@ -1015,7 +1243,8 @@ CREATE TABLE sod_part_2025_q1 PARTITION OF sod_part
 
 ```sql
 -- 1. Build standalone (no partition overhead during load)
-CREATE TABLE sod_part_2025_q2_new (LIKE sod_part INCLUDING DEFAULTS);
+CREATE TABLE sod_part_2025_q2_new
+    (LIKE partlab.salesorderdetail INCLUDING DEFAULTS);
 
 -- 2. Load and index it offline
 --    INSERT / COPY ...
@@ -1029,7 +1258,7 @@ ALTER TABLE sod_part_2025_q2_new
     CHECK (orderdate >= DATE '2025-04-01' AND orderdate < DATE '2025-07-01');
 
 -- 4. Attach -- fast
-ALTER TABLE sod_part ATTACH PARTITION sod_part_2025_q2_new
+ALTER TABLE partlab.salesorderdetail ATTACH PARTITION sod_part_2025_q2_new
     FOR VALUES FROM ('2025-04-01') TO ('2025-07-01');
 
 ALTER TABLE sod_part_2025_q2_new DROP CONSTRAINT ck_bound;
@@ -1037,12 +1266,15 @@ ALTER TABLE sod_part_2025_q2_new DROP CONSTRAINT ck_bound;
 
 ### 12.2 Removing a partition
 
+These statements intentionally consume three different 2022 partitions so the later demonstrations can continue with other partitions.
+
 ```sql
 -- Detach and keep the data as a standalone table (archival)
-ALTER TABLE sod_part DETACH PARTITION sod_part_2022_q1;
+ALTER TABLE partlab.salesorderdetail DETACH PARTITION sod_part_2022_q1;
 
 -- PG 14+: detach without a long lock
-ALTER TABLE sod_part DETACH PARTITION sod_part_2022_q2 CONCURRENTLY;
+ALTER TABLE partlab.salesorderdetail
+    DETACH PARTITION sod_part_2022_q2 CONCURRENTLY;
 
 -- Or drop outright -- instant, regardless of size
 DROP TABLE sod_part_2022_q3;
@@ -1052,15 +1284,17 @@ DROP TABLE sod_part_2022_q3;
 
 ### 12.3 Archiving — detach, compress, retain
 
+Section 12.2 already detached Q1 and Q2 and dropped Q3. This example uses Q4 so the workshop remains sequentially runnable.
+
 ```sql
 BEGIN;
-  ALTER TABLE sod_part DETACH PARTITION sod_part_2022_q1;
-  ALTER TABLE sod_part_2022_q1 RENAME TO archive_sod_2022_q1;
+  ALTER TABLE partlab.salesorderdetail DETACH PARTITION sod_part_2022_q4;
+  ALTER TABLE sod_part_2022_q4 RENAME TO archive_sod_2022_q4;
 COMMIT;
 
 -- Now an ordinary table: export it, move it, or drop indexes to reclaim space
-DROP INDEX IF EXISTS archive_sod_2022_q1_productid_idx;
-VACUUM (FULL, FREEZE, ANALYZE) archive_sod_2022_q1;
+DROP INDEX IF EXISTS sod_part_2022_q4_productid_idx;
+VACUUM (FULL, FREEZE, ANALYZE) archive_sod_2022_q4;
 ```
 
 ### 12.4 Merging and splitting
@@ -1068,19 +1302,20 @@ VACUUM (FULL, FREEZE, ANALYZE) archive_sod_2022_q1;
 PostgreSQL 16 and earlier have **no `MERGE PARTITION` or `SPLIT PARTITION`**. Do it manually:
 
 ```sql
--- Merge two quarters into a half-year partition
+-- Merge two still-attached 2023 quarters into a half-year partition
 BEGIN;
-  ALTER TABLE sod_part DETACH PARTITION sod_part_2022_q1;
-  ALTER TABLE sod_part DETACH PARTITION sod_part_2022_q2;
+  ALTER TABLE partlab.salesorderdetail DETACH PARTITION sod_part_2023_q1;
+  ALTER TABLE partlab.salesorderdetail DETACH PARTITION sod_part_2023_q2;
 
-  CREATE TABLE sod_part_2022_h1 (LIKE sod_part INCLUDING DEFAULTS);
-  INSERT INTO sod_part_2022_h1 SELECT * FROM sod_part_2022_q1;
-  INSERT INTO sod_part_2022_h1 SELECT * FROM sod_part_2022_q2;
+  CREATE TABLE sod_part_2023_h1
+      (LIKE partlab.salesorderdetail INCLUDING DEFAULTS);
+  INSERT INTO sod_part_2023_h1 SELECT * FROM sod_part_2023_q1;
+  INSERT INTO sod_part_2023_h1 SELECT * FROM sod_part_2023_q2;
 
-  ALTER TABLE sod_part ATTACH PARTITION sod_part_2022_h1
-      FOR VALUES FROM ('2022-01-01') TO ('2022-07-01');
+  ALTER TABLE partlab.salesorderdetail ATTACH PARTITION sod_part_2023_h1
+      FOR VALUES FROM ('2023-01-01') TO ('2023-07-01');
 
-  DROP TABLE sod_part_2022_q1, sod_part_2022_q2;
+  DROP TABLE sod_part_2023_q1, sod_part_2023_q2;
 COMMIT;
 ```
 
@@ -1101,7 +1336,7 @@ COMMIT;
 ### 13.2 Lock levels by operation
 
 | Operation | Lock on **parent** | Lock on **partition** | Blocks other partitions? |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `SELECT` (pruned) | `ACCESS SHARE` | `ACCESS SHARE` on surviving partitions | ❌ No |
 | `INSERT`/`UPDATE`/`DELETE` | `ROW EXCLUSIVE` | `ROW EXCLUSIVE` on target | ❌ No |
 | `CREATE TABLE ... PARTITION OF` | `SHARE UPDATE EXCLUSIVE` | — | ❌ No |
@@ -1118,29 +1353,50 @@ COMMIT;
 
 ### 13.3 Demo — prove partition-scoped locking
 
-**Session 1:**
+Open **three independent database connections**, not merely editor tabs that share one connection. Run `SELECT pg_backend_pid();` in each and confirm that all three PIDs differ. A PostgreSQL backend never blocks itself on a lock it already owns.
+
+**Session 1 — acquire and verify the lock:**
 
 ```sql
 BEGIN;
-VACUUM FULL sod_part_2022_q1;   -- ACCESS EXCLUSIVE on this partition only
--- leave it running
+LOCK TABLE partlab.sod_part_2024_q1 IN ACCESS EXCLUSIVE MODE;
+
+SELECT pg_backend_pid() AS session_1_pid,
+       l.relation::regclass AS locked_object,
+       l.mode,
+       l.granted
+FROM pg_locks l
+WHERE l.pid = pg_backend_pid()
+  AND l.relation = 'partlab.sod_part_2024_q1'::regclass
+  AND l.mode = 'AccessExclusiveLock';
+-- Leave this transaction open. Run ROLLBACK after completing the demo.
 ```
+
+The verification query must return one row with `mode = AccessExclusiveLock` and `granted = true`. If it returns no rows, do not continue—the lock is not being held.
+
+> `VACUUM FULL` also takes `ACCESS EXCLUSIVE`, but it cannot run inside a transaction block and releases its lock when the statement finishes. `LOCK TABLE` is used here because it holds the same lock mode predictably until `COMMIT` or `ROLLBACK`.
 
 **Session 2 — runs normally, unblocked:**
 
 ```sql
-SELECT count(*) FROM sod_part
-WHERE orderdate >= DATE '2024-01-01' AND orderdate < DATE '2024-04-01';
--- Completes immediately: pruning means it never touches sod_part_2022_q1
+SELECT pg_backend_pid() AS session_2_pid;  -- must differ from Session 1
+
+SELECT count(*) FROM partlab.salesorderdetail
+WHERE orderdate >= DATE '2024-04-01' AND orderdate < DATE '2024-07-01';
+-- Completes immediately: pruning means it never touches sod_part_2024_q1
 ```
 
-**Session 3 — this one blocks:**
+**Session 3 — this one waits, then times out:**
 
 ```sql
-SELECT count(*) FROM sod_part_2022_q1;   -- waits
+SELECT pg_backend_pid() AS session_3_pid;  -- must differ from Sessions 1 and 2
+
+SET lock_timeout = '30s';  -- prevents an accidental indefinite wait
+SELECT count(*) FROM partlab.sod_part_2024_q1;
+-- Waits, then reports SQLSTATE 55P03 if Session 1 still holds the lock.
 ```
 
-**Inspect the locks:**
+While Session 3 is waiting, run the following in **Session 2**:
 
 ```sql
 SELECT l.pid,
@@ -1151,7 +1407,10 @@ SELECT l.pid,
        left(a.query, 60)    AS query
 FROM pg_locks l
 JOIN pg_stat_activity a USING (pid)
-WHERE l.relation::regclass::text LIKE 'sod_part%'
+JOIN pg_class c ON c.oid = l.relation
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = 'partlab'
+  AND (c.relname = 'salesorderdetail' OR c.relname LIKE 'sod_part_%')
 ORDER BY l.granted, l.pid;
 ```
 
@@ -1159,7 +1418,16 @@ ORDER BY l.granted, l.pid;
 >
 > - `granted = false` rows are **waiting** — that is your blocked session.
 > - **The `locked_object` column names the specific partition**, not the parent. That is the entire point: the blast radius of the lock is one partition.
-> - On a monolithic table, `VACUUM FULL` would have blocked **every** query in sessions 2 *and* 3.
+> - On a monolithic table, the equivalent `ACCESS EXCLUSIVE` lock would have blocked **every** query in sessions 2 *and* 3.
+> - If Session 3 completes immediately, compare the three backend PIDs and rerun the test with separate connections. Shared-connection tabs use the same PID and therefore cannot block each other.
+
+**Cleanup — Session 1:**
+
+```sql
+ROLLBACK;
+```
+
+If Session 3 is still waiting, it completes when Session 1 releases the lock. If it already timed out, reset its session setting with `RESET lock_timeout;`.
 
 ### 13.4 Finding blocking chains
 
@@ -1187,9 +1455,10 @@ ORDER BY blocking_duration DESC;
 2. **`DETACH PARTITION` (non-concurrent) needs `ACCESS EXCLUSIVE` on the parent** — briefly blocking *all* queries against the table. **Use `DETACH ... CONCURRENTLY` on PG 14+.**
 
 3. **Lock queues cascade.** One long query holding `ACCESS SHARE` on the parent delays a waiting `ACCESS EXCLUSIVE`, which in turn queues every subsequent query behind it. Always set a timeout for maintenance DDL:
+
    ```sql
    SET lock_timeout = '5s';
-   ALTER TABLE sod_part DETACH PARTITION sod_part_2022_q1;
+   ALTER TABLE partlab.salesorderdetail DETACH PARTITION sod_part_2024_q2;
    ```
 
 4. **`max_locks_per_transaction`.** A query touching hundreds of partitions acquires hundreds of locks. Wide scans across many partitions can exhaust the lock table — the error is `out of shared memory` with a hint about this parameter. **Another reason not to over-partition.**
@@ -1201,7 +1470,7 @@ ORDER BY blocking_duration DESC;
 ## 14. Cross-platform comparison
 
 | Feature | **PostgreSQL** | **Oracle** | **SQL Server** |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | Declarative partitioning | ✅ PG 10+ | ✅ | ✅ (partition function/scheme) |
 | RANGE / LIST / HASH | ✅ All three | ✅ + composite, reference, interval | ✅ RANGE only |
 | **Automatic partition creation** | ❌ `pg_partman` or scripts | ✅ **INTERVAL partitioning** | ❌ |
@@ -1217,6 +1486,7 @@ ORDER BY blocking_duration DESC;
 | **Parent stats auto-maintained** | ❌ **Manual `ANALYZE`** | ✅ | ✅ |
 
 > **The two lines to highlight for an Oracle DBA:**
+>
 > 1. **No global indexes.** Any Oracle design relying on a global unique index on a non-partition-key column **cannot be ported directly.** This is a schema-redesign item, not a syntax translation.
 > 2. **No INTERVAL partitioning.** Oracle creates the next partition automatically; PostgreSQL does not. Budget for `pg_partman` or a scheduled job — and make sure it is monitored, because a missing future partition means failed inserts.
 
@@ -1248,8 +1518,13 @@ WHERE pg_get_expr(c.relpartbound, c.oid) = 'DEFAULT'
 SELECT i.inhparent::regclass AS parent,
        c.relname             AS partition,
        c.reltuples::bigint   AS est_rows,
-       round(100.0 * c.reltuples /
-             NULLIF(sum(c.reltuples) OVER (PARTITION BY i.inhparent), 0), 1) AS pct_of_total
+       round(
+           (
+               100.0 * c.reltuples /
+               NULLIF(sum(c.reltuples) OVER (PARTITION BY i.inhparent), 0)
+           )::numeric,
+           1
+       ) AS pct_of_total
 FROM pg_class c
 JOIN pg_inherits i ON i.inhrelid = c.oid
 WHERE c.relkind = 'r'
@@ -1274,6 +1549,7 @@ WHERE parent.relkind = 'p'
 ## 16. Checklist
 
 **Design**
+
 - [ ] Partition key appears in **almost every** query's `WHERE` clause
 - [ ] Partition key is in the primary key and every unique constraint
 - [ ] No requirement for a unique constraint excluding the partition key
@@ -1282,12 +1558,14 @@ WHERE parent.relkind = 'p'
 - [ ] DEFAULT partition decision made deliberately — and monitored if present
 
 **Creation**
+
 - [ ] For existing data, method chosen (copy vs `ATTACH`) with **disk space verified**
 - [ ] `ATTACH` preceded by a validated `CHECK` constraint to skip the scan
 - [ ] Data loaded **before** indexes, not after
 - [ ] Parent indexes built with `ON ONLY` + per-partition `CONCURRENTLY` + `ATTACH`
 
 **Maintenance**
+
 - [ ] Future partitions created ahead of need (`pg_partman` or a monitored job)
 - [ ] ⚠️ **`ANALYZE <parent>` scheduled explicitly** — autovacuum will not do it
 - [ ] Per-partition autovacuum tuning: aggressive on hot, relaxed on cold
@@ -1297,6 +1575,7 @@ WHERE parent.relkind = 'p'
 - [ ] Extended statistics recreated per partition where needed
 
 **Operations**
+
 - [ ] `DETACH ... CONCURRENTLY` used on PG 14+
 - [ ] `lock_timeout` set for all maintenance DDL
 - [ ] Parent `ALTER TABLE` scheduled as a full-table outage
@@ -1305,21 +1584,112 @@ WHERE parent.relkind = 'p'
 
 ## 17. Teardown
 
+Remove the `pg_partman` registration before dropping the tables. The extension and its `part_config` table normally live outside `partlab`, so `DROP SCHEMA partlab CASCADE` does not necessarily remove that metadata.
+
 ```sql
-DROP SCHEMA partlab CASCADE;
+-- Safe even if partlab was already dropped: remove any stale pg_partman row
+-- from the schema where the extension is actually installed.
+DO $$
+DECLARE
+    extension_schema name;
+BEGIN
+    SELECT n.nspname
+    INTO extension_schema
+    FROM pg_extension e
+    JOIN pg_namespace n ON n.oid = e.extnamespace
+    WHERE e.extname = 'pg_partman';
+
+    IF extension_schema IS NOT NULL THEN
+        EXECUTE format(
+            'DELETE FROM %I.part_config WHERE parent_table = $1',
+            extension_schema
+        )
+        USING 'partlab.sod_live';
+    END IF;
+END $$;
+
+DROP SCHEMA IF EXISTS partlab CASCADE;
+```
+
+Verify that the schema and every object owned by it are gone:
+
+```sql
+SELECT to_regnamespace('partlab') IS NULL AS schema_removed,
+       NOT EXISTS (
+           SELECT 1
+           FROM pg_class c
+           JOIN pg_namespace n ON n.oid = c.relnamespace
+           WHERE n.nspname = 'partlab'
+       ) AS no_relations_indexes_or_sequences,
+       NOT EXISTS (
+           SELECT 1
+           FROM pg_proc p
+           JOIN pg_namespace n ON n.oid = p.pronamespace
+           WHERE n.nspname = 'partlab'
+       ) AS no_routines,
+       NOT EXISTS (
+           SELECT 1
+           FROM pg_type t
+           JOIN pg_namespace n ON n.oid = t.typnamespace
+           WHERE n.nspname = 'partlab'
+       ) AS no_types;
+```
+
+Expected result:
+
+```text
+ schema_removed | no_relations_indexes_or_sequences | no_routines | no_types
+----------------+-----------------------------------+-------------+----------
+ true           | true                              | true        | true
+```
+
+Verify that `pg_partman` has no remaining registration for the lab:
+
+```sql
+-- Resolve the extension schema for this session.
+SELECT set_config(
+    'search_path',
+    quote_ident(n.nspname) || ', public',
+    false
+)
+FROM pg_extension e
+JOIN pg_namespace n ON n.oid = e.extnamespace
+WHERE e.extname = 'pg_partman';
+
+SELECT count(*) AS stale_partman_registrations
+FROM part_config
+WHERE parent_table LIKE 'partlab.%';
+-- Expected: 0
+```
+
+The `pg_partman` extension itself remains installed because it may have existed before the lab or may manage other partition sets:
+
+```sql
+SELECT e.extname, e.extversion, n.nspname AS extension_schema
+FROM pg_extension e
+JOIN pg_namespace n ON n.oid = e.extnamespace
+WHERE e.extname = 'pg_partman';
+```
+
+> **Optional:** only if `pg_partman` was installed solely for this lab and is not used by anything else in the database, remove it with `DROP EXTENSION pg_partman;`. Do not use `CASCADE`. Azure server parameters such as `azure.extensions` and `shared_preload_libraries` are server configuration, not schema objects; revert them separately only if you changed them solely for this lab.
+
+Restore the normal search path:
+
+```sql
+SET search_path TO public;
 ```
 
 ---
 
 ## Reference
 
-- Table partitioning — https://www.postgresql.org/docs/current/ddl-partitioning.html
-- `CREATE TABLE ... PARTITION` — https://www.postgresql.org/docs/current/sql-createtable.html
-- `ALTER TABLE ... ATTACH/DETACH PARTITION` — https://www.postgresql.org/docs/current/sql-altertable.html
-- Partition pruning — https://www.postgresql.org/docs/current/ddl-partitioning.html#DDL-PARTITION-PRUNING
-- Explicit locking — https://www.postgresql.org/docs/current/explicit-locking.html
-- Routine vacuuming — https://www.postgresql.org/docs/current/routine-vacuuming.html
-- Planner statistics — https://www.postgresql.org/docs/current/planner-stats.html
-- Azure Database for PostgreSQL: enable and use `pg_partman` — https://learn.microsoft.com/azure/postgresql/configure-maintain/how-to-use-pg-partman
-- `pg_partman` — https://github.com/pgpartman/pg_partman
-- Azure — extensions — https://learn.microsoft.com/en-us/azure/postgresql/extensions/concepts-extensions
+- Table partitioning — <https://www.postgresql.org/docs/current/ddl-partitioning.html>
+- `CREATE TABLE ... PARTITION` — <https://www.postgresql.org/docs/current/sql-createtable.html>
+- `ALTER TABLE ... ATTACH/DETACH PARTITION` — <https://www.postgresql.org/docs/current/sql-altertable.html>
+- Partition pruning — <https://www.postgresql.org/docs/current/ddl-partitioning.html#DDL-PARTITION-PRUNING>
+- Explicit locking — <https://www.postgresql.org/docs/current/explicit-locking.html>
+- Routine vacuuming — <https://www.postgresql.org/docs/current/routine-vacuuming.html>
+- Planner statistics — <https://www.postgresql.org/docs/current/planner-stats.html>
+- Azure Database for PostgreSQL: enable and use `pg_partman` — <https://learn.microsoft.com/azure/postgresql/configure-maintain/how-to-use-pg-partman>
+- `pg_partman` — <https://github.com/pgpartman/pg_partman>
+- Azure — extensions — <https://learn.microsoft.com/en-us/azure/postgresql/extensions/concepts-extensions>
