@@ -1138,7 +1138,7 @@ ORDER BY blocking_duration DESC;
 
 ---
 
---- Health-check query pack
+-- 15. Health-check query pack
 
 -- 1. Every partitioned table and its partition count
 SELECT c.relname                        AS partitioned_table,
